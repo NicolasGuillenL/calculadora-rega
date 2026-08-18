@@ -81,7 +81,7 @@ def inserir_planta(conn, planta):
     cur = conn.cursor()
     colunas = ", ".join(CAMPOS_PLANTA)
     marcadores = ", ".join("?" for _ in CAMPOS_PLANTA)
-    valores = [planta.get(campo) for campo in CAMPOS_PLANTA]
+    valores = tuple(planta.get(campo) for campo in CAMPOS_PLANTA)
     cur.execute(f"INSERT INTO plantas ({colunas}) VALUES ({marcadores})", valores)
     conn.commit()
     return cur.lastrowid
