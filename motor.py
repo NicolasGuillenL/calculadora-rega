@@ -9,31 +9,58 @@ import regras_score
 
 def rodar_ciclo(conn, hoje=None):
     hoje = hoje or datetime.date.today()
+    hoje_iso = hoje.isoformat()
     coordenadas_por_cidade = {}
-    resumo = {"novos_avisos": [], "ainda_atrasadas": [], "atualizadas": []}
+    clima_por_cidade = {}
+    resumo = {"novos_avisos": [], "ainda_atrasadas": [], "atualizadas": [], "adiados": []}
 
     for planta in db.listar_plantas(conn):
+        if db.ja_processado_hoje(conn, planta["id"], hoje_iso):
+            # já rodou hoje pra essa planta: não soma o incremento de novo,
+            # mas um lembrete pendente real não pode ficar escondido numa
+            # segunda chamada do ciclo no mesmo dia.
+            if planta["score"] >= 100:
+                if planta["evento_calendario_id"]:
+                    resumo["ainda_atrasadas"].append({
+                        "nome": planta["nome"],
+                        "score": planta["score"],
+                        "evento_calendario_id": planta["evento_calendario_id"],
+                    })
+                else:
+                    resumo["novos_avisos"].append({
+                        "nome": planta["nome"],
+                        "score": planta["score"],
+                        "planta_id": planta["id"],
+                    })
+            continue
+
         cidade = planta["cidade"]
         if cidade not in coordenadas_por_cidade:
             coordenadas_por_cidade[cidade] = config.resolver_coordenadas(cidade)
         lat, lon = coordenadas_por_cidade[cidade]
 
-        resposta = clima.buscar_dados_climaticos(lat, lon)
-        clima_hoje = clima.clima_do_dia(resposta, hoje.isoformat())
+        if cidade not in clima_por_cidade:
+            clima_por_cidade[cidade] = clima.buscar_dados_climaticos(lat, lon)
+        resposta = clima_por_cidade[cidade]
+        clima_hoje = clima.clima_do_dia(resposta, hoje_iso)
 
         incremento_base = regras_score.calcular_incremento_base(planta, hoje)
         incremento_clima = clima.calcular_incremento_clima(planta, clima_hoje)
         score_projetado = planta["score"] + incremento_base + incremento_clima
 
         adiar = clima.deve_adiar_aviso(score_projetado, clima_hoje)
-        novo_score = planta["score"] if adiar else score_projetado
+        # O score sempre avança pro valor calculado, com piso em 0 (chuva
+        # forte não pode gerar score negativo). "adiar" só controla se a
+        # planta aparece em novos_avisos hoje — não congela o score, senão
+        # ela fica travada pra sempre caso a chuva prevista não se
+        # confirme.
+        novo_score = max(0.0, score_projetado)
 
-        # O histórico sempre registra o valor CALCULADO (score_projetado),
-        # independentemente de o aviso ter sido adiado. O que muda com o
-        # adiamento é apenas o score efetivamente aplicado à planta
-        # (novo_score), não o que foi registrado no histórico.
+        # O histórico sempre registra o valor CALCULADO (score_projetado,
+        # sem piso), pra manter o registro fiel ao que foi de fato apurado
+        # naquele dia.
         db.registrar_historico_score(
-            conn, planta["id"], hoje.isoformat(),
+            conn, planta["id"], hoje_iso,
             incremento_base, incremento_clima, score_projetado,
             clima_hoje["et0"], clima_hoje["precipitacao_mm"],
         )
@@ -42,10 +69,17 @@ def rodar_ciclo(conn, hoje=None):
 
         if novo_score >= 100:
             if planta["evento_calendario_id"]:
+                # já existe lembrete pra essa planta: adiar não desfaz isso.
                 resumo["ainda_atrasadas"].append({
                     "nome": planta["nome"],
                     "score": novo_score,
                     "evento_calendario_id": planta["evento_calendario_id"],
+                })
+            elif adiar:
+                resumo["adiados"].append({
+                    "nome": planta["nome"],
+                    "score": novo_score,
+                    "planta_id": planta["id"],
                 })
             else:
                 resumo["novos_avisos"].append({
