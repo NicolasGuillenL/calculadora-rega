@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS plantas (
     score REAL NOT NULL DEFAULT 0,
     ultima_rega TEXT,
     evento_calendario_id TEXT,
+    retencao_substrato TEXT NOT NULL DEFAULT 'media',
+    evento_projetado_id TEXT,
     criado_em TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -68,7 +70,7 @@ CREATE TABLE IF NOT EXISTS historico_scores (
 CAMPOS_PLANTA = [
     "nome", "temperatura_ideal_c", "umidade_ideal_pct", "florescimento",
     "crescimento", "crescimento2", "poda", "replantio", "mudas",
-    "epoca_mudas", "exposicao", "cidade",
+    "epoca_mudas", "exposicao", "cidade", "retencao_substrato",
 ]
 
 
@@ -78,6 +80,26 @@ def criar_schema(conn):
         instrucao = instrucao.strip()
         if instrucao:
             cur.execute(instrucao)
+    conn.commit()
+    migrar_schema_v2(conn)
+
+
+def migrar_schema_v2(conn):
+    """Adiciona as colunas da v2 (retencao_substrato, evento_projetado_id) a
+    um banco criado antes delas existirem. Idempotente: rodar mais de uma
+    vez não quebra, mesmo que as colunas já existam (CREATE TABLE já as
+    inclui em bancos novos, então isso vira um no-op nesse caso)."""
+    cur = conn.cursor()
+    alteracoes = [
+        "ALTER TABLE plantas ADD COLUMN retencao_substrato TEXT NOT NULL DEFAULT 'media'",
+        "ALTER TABLE plantas ADD COLUMN evento_projetado_id TEXT",
+    ]
+    for instrucao in alteracoes:
+        try:
+            cur.execute(instrucao)
+        except Exception as erro:
+            if "duplicate column" not in str(erro).lower():
+                raise
     conn.commit()
 
 

@@ -16,6 +16,7 @@ PLANTA_EXEMPLO = {
     "mudas": "Estacas em água",
     "epoca_mudas": "Primavera",
     "exposicao": 5,
+    "retencao_substrato": "media",
     "cidade": "Sao Paulo, SP",
 }
 
@@ -139,3 +140,38 @@ def test_atualizar_exposicao():
     db.atualizar_exposicao(conn, planta_id, 10)
 
     assert db.obter_planta(conn, "Jiboia")["exposicao"] == 10
+
+
+def test_migrar_schema_v2_adiciona_colunas_novas():
+    conn = sqlite3.connect(":memory:")
+    # schema "antigo" (pré-v2), sem retencao_substrato nem evento_projetado_id
+    conn.execute("""
+        CREATE TABLE plantas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL UNIQUE,
+            temperatura_ideal_c REAL,
+            umidade_ideal_pct REAL,
+            florescimento TEXT,
+            crescimento TEXT,
+            crescimento2 TEXT,
+            poda TEXT,
+            replantio TEXT,
+            mudas TEXT,
+            epoca_mudas TEXT,
+            exposicao INTEGER NOT NULL DEFAULT 5,
+            cidade TEXT NOT NULL,
+            score REAL NOT NULL DEFAULT 0,
+            ultima_rega TEXT,
+            evento_calendario_id TEXT,
+            criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("INSERT INTO plantas (nome, cidade) VALUES (?, ?)", ("Jiboia", "Sao Paulo, SP"))
+    conn.commit()
+
+    db.migrar_schema_v2(conn)
+    db.migrar_schema_v2(conn)  # idempotente: rodar de novo não pode quebrar
+
+    planta = db.obter_planta(conn, "Jiboia")
+    assert planta["retencao_substrato"] == "media"
+    assert planta["evento_projetado_id"] is None

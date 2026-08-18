@@ -27,7 +27,7 @@ def _parse_umidade(valor):
     return float(valor.replace("%", "").strip())
 
 
-def migrar(conn, caminho_ipynb, cidade_padrao, exposicao_padrao=5):
+def migrar(conn, caminho_ipynb, cidade_padrao, exposicao_padrao=5, retencao_substrato_padrao="media"):
     plantas, _estacoes = carregar_dados_do_notebook(caminho_ipynb)
 
     inseridas = []
@@ -45,6 +45,7 @@ def migrar(conn, caminho_ipynb, cidade_padrao, exposicao_padrao=5):
             "epoca_mudas": atributos.get("epoca_mudas"),
             "exposicao": exposicao_padrao,
             "cidade": cidade_padrao,
+            "retencao_substrato": retencao_substrato_padrao,
         }
         db.inserir_planta(conn, planta)
         inseridas.append(nome)

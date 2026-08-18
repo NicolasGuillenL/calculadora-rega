@@ -17,6 +17,7 @@ PLANTA_EXEMPLO = {
     "mudas": None,
     "epoca_mudas": None,
     "exposicao": 5,
+    "retencao_substrato": "media",
     "cidade": "Sao Paulo, SP",
 }
 
