@@ -51,6 +51,8 @@ SCORE_PROJETADO_ADIA = 90
 FATOR_ALIVIO_CHUVA_INDOOR = 0.5
 LIMIAR_ALIVIO_CHUVA_INDOOR_MAX = 3.0
 
+FATOR_RETENCAO = {"alta": 0.6, "media": 1.0, "baixa": 1.3}
+
 
 def geocode_cidade(cidade):
     resp = _get_com_retry(
@@ -63,7 +65,7 @@ def geocode_cidade(cidade):
     return resultados[0]["latitude"], resultados[0]["longitude"]
 
 
-def buscar_dados_climaticos(lat, lon, dias_passados=1, dias_futuros=2):
+def buscar_dados_climaticos(lat, lon, dias_passados=1, dias_futuros=3):
     resp = _get_com_retry(
         "https://api.open-meteo.com/v1/forecast",
         params={
@@ -95,8 +97,9 @@ def clima_do_dia(resposta_api, data_iso):
 def calcular_incremento_clima(planta, clima_hoje):
     exposicao_fator = planta["exposicao"] / 10
     fator = regras_score.fator_planta(planta["umidade_ideal_pct"])
+    fator_retencao = FATOR_RETENCAO[planta.get("retencao_substrato", "media")]
 
-    secagem = clima_hoje["et0"] * fator * exposicao_fator
+    secagem = clima_hoje["et0"] * fator * fator_retencao * exposicao_fator
 
     if exposicao_fator > 0:
         if clima_hoje["windspeed_10m_max"] >= LIMIAR_VENTO_KMH:

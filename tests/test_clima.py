@@ -173,3 +173,46 @@ def test_nao_deve_adiar_aviso_quando_score_baixo():
 def test_nao_deve_adiar_aviso_quando_chuva_improvavel():
     clima_hoje = {"probabilidade_chuva_pct": 10}
     assert clima.deve_adiar_aviso(95, clima_hoje) is False
+
+
+def test_incremento_clima_retencao_alta_amortece_secagem():
+    planta_media = {"umidade_ideal_pct": 70, "exposicao": 10, "retencao_substrato": "media"}
+    planta_alta = {"umidade_ideal_pct": 70, "exposicao": 10, "retencao_substrato": "alta"}
+
+    incremento_media = clima.calcular_incremento_clima(planta_media, _clima_seco_e_quente())
+    incremento_alta = clima.calcular_incremento_clima(planta_alta, _clima_seco_e_quente())
+
+    assert incremento_alta < incremento_media
+
+
+def test_incremento_clima_retencao_baixa_acelera_secagem():
+    planta_media = {"umidade_ideal_pct": 70, "exposicao": 10, "retencao_substrato": "media"}
+    planta_baixa = {"umidade_ideal_pct": 70, "exposicao": 10, "retencao_substrato": "baixa"}
+
+    incremento_media = clima.calcular_incremento_clima(planta_media, _clima_seco_e_quente())
+    incremento_baixa = clima.calcular_incremento_clima(planta_baixa, _clima_seco_e_quente())
+
+    assert incremento_baixa > incremento_media
+
+
+def test_incremento_clima_sem_retencao_substrato_usa_media_por_padrao():
+    planta_sem_campo = {"umidade_ideal_pct": 70, "exposicao": 10}
+    planta_media_explicita = {"umidade_ideal_pct": 70, "exposicao": 10, "retencao_substrato": "media"}
+
+    incremento_sem_campo = clima.calcular_incremento_clima(planta_sem_campo, _clima_seco_e_quente())
+    incremento_media_explicita = clima.calcular_incremento_clima(planta_media_explicita, _clima_seco_e_quente())
+
+    assert incremento_sem_campo == incremento_media_explicita
+
+
+@patch("clima.requests.get")
+def test_buscar_dados_climaticos_pede_3_dias_futuros_por_padrao(mock_get):
+    mock_resposta = Mock()
+    mock_resposta.json.return_value = RESPOSTA_API_EXEMPLO
+    mock_resposta.raise_for_status.return_value = None
+    mock_get.return_value = mock_resposta
+
+    clima.buscar_dados_climaticos(-23.5, -46.6)
+
+    args, kwargs = mock_get.call_args
+    assert kwargs["params"]["forecast_days"] == 3
