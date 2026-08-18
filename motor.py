@@ -33,21 +33,13 @@ def rodar_ciclo(conn, hoje=None):
     hoje_iso = hoje.isoformat()
     coordenadas_por_cidade = {}
     clima_por_cidade = {}
-    resumo = {"novos_avisos": [], "ainda_atrasadas": [], "atualizadas": [], "adiados": []}
+    resumo = {
+        "novos_avisos": [], "ainda_atrasadas": [], "atualizadas": [],
+        "adiados": [], "projecoes": [],
+    }
 
     for planta in db.listar_plantas(conn):
         if db.ja_processado_hoje(conn, planta["id"], hoje_iso):
-            # já rodou hoje pra essa planta: não soma o incremento de novo.
-            # Um lembrete que JÁ existe (evento_calendario_id setado) não
-            # pode ficar escondido numa segunda chamada do ciclo no mesmo
-            # dia — continua aparecendo em ainda_atrasadas. Mas se ainda não
-            # existe evento, não dá pra saber aqui se a planta cruzou 100
-            # "limpo" ou se foi adiada na primeira passada de hoje (essa
-            # decisão dependeu do clima do momento, que não fica guardado) —
-            # então não reclassificamos como novo aviso numa segunda
-            # chamada: reexpor arriscaria criar um lembrete duplicado ou
-            # ignorar um adiamento que já tinha sido decidido hoje. O ciclo
-            # de amanhã reavalia isso do zero.
             if planta["score"] >= 100 and planta["evento_calendario_id"]:
                 resumo["ainda_atrasadas"].append({
                     "nome": planta["nome"],
@@ -71,16 +63,8 @@ def rodar_ciclo(conn, hoje=None):
         score_projetado = planta["score"] + incremento_base + incremento_clima
 
         adiar = clima.deve_adiar_aviso(score_projetado, clima_hoje)
-        # O score sempre avança pro valor calculado, com piso em 0 (chuva
-        # forte não pode gerar score negativo). "adiar" só controla se a
-        # planta aparece em novos_avisos hoje — não congela o score, senão
-        # ela fica travada pra sempre caso a chuva prevista não se
-        # confirme.
         novo_score = max(0.0, score_projetado)
 
-        # O histórico sempre registra o valor CALCULADO (score_projetado,
-        # sem piso), pra manter o registro fiel ao que foi de fato apurado
-        # naquele dia.
         db.registrar_historico_score(
             conn, planta["id"], hoje_iso,
             incremento_base, incremento_clima, score_projetado,
@@ -91,7 +75,6 @@ def rodar_ciclo(conn, hoje=None):
 
         if novo_score >= 100:
             if planta["evento_calendario_id"]:
-                # já existe lembrete pra essa planta: adiar não desfaz isso.
                 resumo["ainda_atrasadas"].append({
                     "nome": planta["nome"],
                     "score": novo_score,
@@ -104,10 +87,36 @@ def rodar_ciclo(conn, hoje=None):
                     "planta_id": planta["id"],
                 })
             else:
-                resumo["novos_avisos"].append({
+                entrada = {"nome": planta["nome"], "score": novo_score, "planta_id": planta["id"]}
+                if planta["evento_projetado_id"]:
+                    entrada["evento_projetado_id"] = planta["evento_projetado_id"]
+                resumo["novos_avisos"].append(entrada)
+        else:
+            # não cruzou hoje: verifica se cruzaria dentro da janela de
+            # projeção (2 dias), pra manter o evento "previsão" em dia. A
+            # simulação parte do score JÁ ATUALIZADO de hoje (novo_score),
+            # não do score antigo em `planta` (que é o valor de antes do
+            # ciclo rodar) — senão a projeção subestima quanto a planta já
+            # avançou hoje.
+            planta_com_score_atual = {**planta, "score": novo_score}
+            data_prevista = simular_projecao(planta_com_score_atual, resposta, hoje)
+            projetado_atual = planta["evento_projetado_id"]
+            if data_prevista:
+                acao = {
                     "nome": planta["nome"],
-                    "score": novo_score,
                     "planta_id": planta["id"],
+                    "data_prevista": data_prevista,
+                    "acao": "atualizar" if projetado_atual else "criar",
+                }
+                if projetado_atual:
+                    acao["evento_projetado_id"] = projetado_atual
+                resumo["projecoes"].append(acao)
+            elif projetado_atual:
+                resumo["projecoes"].append({
+                    "acao": "cancelar",
+                    "nome": planta["nome"],
+                    "planta_id": planta["id"],
+                    "evento_projetado_id": projetado_atual,
                 })
 
     return resumo

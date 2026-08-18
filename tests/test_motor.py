@@ -340,3 +340,99 @@ def test_simular_projecao_retorna_none_quando_nao_cruza():
     data_prevista = motor.simular_projecao(planta, resposta_fraca, datetime.date(2026, 8, 18))
 
     assert data_prevista is None
+
+
+RESPOSTA_PROJECAO_CICLO = {
+    "daily": {
+        "time": ["2026-08-17", "2026-08-18", "2026-08-19", "2026-08-20"],
+        "et0_fao_evapotranspiration": [3.0, 1.0, 5.0, 5.0],
+        "precipitation_sum": [0.0, 0.0, 0.0, 0.0],
+        "precipitation_probability_max": [10, 10, 10, 10],
+        "windspeed_10m_max": [5.0, 5.0, 5.0, 5.0],
+        "uv_index_max": [3.0, 3.0, 3.0, 3.0],
+        "relative_humidity_2m_mean": [55.0, 55.0, 55.0, 55.0],
+        "cloudcover_mean": [20.0, 20.0, 20.0, 20.0],
+    }
+}
+
+
+@patch("motor.config.resolver_coordenadas", return_value=(-23.5, -46.6))
+@patch("motor.clima.buscar_dados_climaticos", return_value=RESPOSTA_PROJECAO_CICLO)
+def test_rodar_ciclo_cria_projecao_quando_score_nao_cruza_hoje_mas_projeta_em_2_dias(
+    mock_busca, mock_coords
+):
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, {**PLANTA_EXEMPLO, "umidade_ideal_pct": 70.0, "exposicao": 10})
+    db.atualizar_score(conn, planta_id, 50)  # + hoje (et0=1.0) => novo_score ~66.5, ainda < 100
+
+    resumo = motor.rodar_ciclo(conn, hoje=datetime.date(2026, 8, 18))
+
+    assert len(resumo["projecoes"]) == 1
+    projecao = resumo["projecoes"][0]
+    assert projecao["acao"] == "criar"
+    assert projecao["nome"] == "Jiboia"
+    assert projecao["data_prevista"] == "2026-08-20"
+
+
+@patch("motor.config.resolver_coordenadas", return_value=(-23.5, -46.6))
+@patch("motor.clima.buscar_dados_climaticos", return_value=RESPOSTA_PROJECAO_CICLO)
+def test_rodar_ciclo_atualiza_projecao_existente(mock_busca, mock_coords):
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, {**PLANTA_EXEMPLO, "umidade_ideal_pct": 70.0, "exposicao": 10})
+    db.atualizar_score(conn, planta_id, 50)
+    db.marcar_evento_projetado(conn, planta_id, "projetado-existente")
+
+    resumo = motor.rodar_ciclo(conn, hoje=datetime.date(2026, 8, 18))
+
+    assert len(resumo["projecoes"]) == 1
+    projecao = resumo["projecoes"][0]
+    assert projecao["acao"] == "atualizar"
+    assert projecao["evento_projetado_id"] == "projetado-existente"
+    assert projecao["data_prevista"] == "2026-08-20"
+
+
+@patch("motor.config.resolver_coordenadas", return_value=(-23.5, -46.6))
+@patch("motor.clima.buscar_dados_climaticos")
+def test_rodar_ciclo_cancela_projecao_que_nao_se_confirma_mais(mock_busca, mock_coords):
+    resposta_chuva_forte = {
+        "daily": {
+            "time": ["2026-08-18", "2026-08-19", "2026-08-20"],
+            "et0_fao_evapotranspiration": [1.0, 1.0, 1.0],
+            "precipitation_sum": [0.0, 20.0, 20.0],
+            "precipitation_probability_max": [10, 90, 90],
+            "windspeed_10m_max": [5.0, 5.0, 5.0],
+            "uv_index_max": [3.0, 3.0, 3.0],
+            "relative_humidity_2m_mean": [55.0, 55.0, 55.0],
+            "cloudcover_mean": [20.0, 20.0, 20.0],
+        }
+    }
+    mock_busca.return_value = resposta_chuva_forte
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, {**PLANTA_EXEMPLO, "umidade_ideal_pct": 30.0, "exposicao": 10})
+    db.atualizar_score(conn, planta_id, 10)  # + hoje (sem chuva ainda) => novo_score ~16.5, < 100
+    db.marcar_evento_projetado(conn, planta_id, "projetado-existente")
+
+    resumo = motor.rodar_ciclo(conn, hoje=datetime.date(2026, 8, 18))
+
+    assert len(resumo["projecoes"]) == 1
+    projecao = resumo["projecoes"][0]
+    assert projecao["acao"] == "cancelar"
+    assert projecao["evento_projetado_id"] == "projetado-existente"
+
+
+@patch("motor.config.resolver_coordenadas", return_value=(-23.5, -46.6))
+@patch("motor.clima.buscar_dados_climaticos", return_value={"daily": {"time": ["2026-08-18"]}})
+@patch("motor.clima.clima_do_dia", return_value=CLIMA_NEUTRO)
+def test_rodar_ciclo_cruzamento_real_carrega_evento_projetado_pra_promover(
+    mock_clima_dia, mock_busca, mock_coords
+):
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+    db.atualizar_score(conn, planta_id, 95)
+    db.marcar_evento_projetado(conn, planta_id, "projetado-existente")
+
+    resumo = motor.rodar_ciclo(conn, hoje=datetime.date(2026, 8, 18))
+
+    assert len(resumo["novos_avisos"]) == 1
+    assert resumo["novos_avisos"][0]["evento_projetado_id"] == "projetado-existente"
+    assert resumo["projecoes"] == []
