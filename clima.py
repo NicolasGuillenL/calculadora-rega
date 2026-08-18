@@ -97,7 +97,12 @@ def clima_do_dia(resposta_api, data_iso):
 def calcular_incremento_clima(planta, clima_hoje):
     exposicao_fator = planta["exposicao"] / 10
     fator = regras_score.fator_planta(planta["umidade_ideal_pct"])
-    fator_retencao = FATOR_RETENCAO[planta.get("retencao_substrato", "media")]
+    # .get(..., 1.0) em vez de [] é defesa em profundidade: o valor já é
+    # validado em db.atualizar_retencao_substrato, mas se um valor inválido
+    # chegar até aqui por outro caminho (SQL direto, código futuro), cair
+    # pro fator neutro (media) é bem melhor do que derrubar o ciclo diário
+    # inteiro com KeyError.
+    fator_retencao = FATOR_RETENCAO.get(planta.get("retencao_substrato", "media"), 1.0)
 
     secagem = clima_hoje["et0"] * fator * fator_retencao * exposicao_fator
 

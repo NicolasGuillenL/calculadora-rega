@@ -67,6 +67,11 @@ CREATE TABLE IF NOT EXISTS historico_scores (
 );
 """
 
+# Mantém em sincronia (conceitualmente) com as chaves de clima.FATOR_RETENCAO
+# — não importamos `clima` aqui pra não criar uma dependência às avessas
+# (clima.py não precisa saber nada sobre db.py).
+VALORES_RETENCAO_VALIDOS = {"alta", "media", "baixa"}
+
 CAMPOS_PLANTA = [
     "nome", "temperatura_ideal_c", "umidade_ideal_pct", "florescimento",
     "crescimento", "crescimento2", "poda", "replantio", "mudas",
@@ -173,6 +178,10 @@ def promover_evento_projetado(conn, planta_id, evento_id):
 
 
 def atualizar_retencao_substrato(conn, planta_id, novo_valor):
+    if novo_valor not in VALORES_RETENCAO_VALIDOS:
+        raise ValueError(
+            f"retencao_substrato inválido: '{novo_valor}'. Use um de: alta, media, baixa."
+        )
     cur = conn.cursor()
     cur.execute("UPDATE plantas SET retencao_substrato = ? WHERE id = ?", (novo_valor, planta_id))
     conn.commit()

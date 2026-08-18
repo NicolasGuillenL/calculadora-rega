@@ -205,6 +205,21 @@ def test_incremento_clima_sem_retencao_substrato_usa_media_por_padrao():
     assert incremento_sem_campo == incremento_media_explicita
 
 
+def test_incremento_clima_com_retencao_substrato_invalida_cai_para_media():
+    # Defesa em profundidade (achado 2 da revisão final): se um valor
+    # inválido chegar de algum outro jeito até aqui (ex.: escrito
+    # diretamente via SQL, ou por um caminho de código futuro que não passe
+    # por db.atualizar_retencao_substrato), o cálculo não pode explodir com
+    # KeyError — deve cair pro fator neutro (media = 1.0).
+    planta_invalida = {"umidade_ideal_pct": 70, "exposicao": 10, "retencao_substrato": "invalido"}
+    planta_media_explicita = {"umidade_ideal_pct": 70, "exposicao": 10, "retencao_substrato": "media"}
+
+    incremento_invalido = clima.calcular_incremento_clima(planta_invalida, _clima_seco_e_quente())
+    incremento_media_explicita = clima.calcular_incremento_clima(planta_media_explicita, _clima_seco_e_quente())
+
+    assert incremento_invalido == incremento_media_explicita
+
+
 @patch("clima.requests.get")
 def test_buscar_dados_climaticos_pede_3_dias_futuros_por_padrao(mock_get):
     mock_resposta = Mock()

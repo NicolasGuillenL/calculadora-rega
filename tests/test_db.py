@@ -207,3 +207,27 @@ def test_atualizar_retencao_substrato():
     db.atualizar_retencao_substrato(conn, planta_id, "alta")
 
     assert db.obter_planta(conn, "Jiboia")["retencao_substrato"] == "alta"
+
+
+def test_atualizar_retencao_substrato_aceita_todos_os_valores_validos():
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+
+    for valor in ("alta", "media", "baixa"):
+        db.atualizar_retencao_substrato(conn, planta_id, valor)
+        assert db.obter_planta(conn, "Jiboia")["retencao_substrato"] == valor
+
+
+def test_atualizar_retencao_substrato_rejeita_valor_invalido():
+    # Regressão do achado 2 da revisão final: um valor inválido (ex.: erro
+    # de digitação/capitalização) não pode ser gravado — se chegasse até o
+    # banco, derrubaria o ciclo diário inteiro (KeyError em
+    # clima.FATOR_RETENCAO) sem isolamento por planta.
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+
+    with pytest.raises(ValueError):
+        db.atualizar_retencao_substrato(conn, planta_id, "Alta")
+
+    # o valor original não deve ter sido sobrescrito.
+    assert db.obter_planta(conn, "Jiboia")["retencao_substrato"] == "media"

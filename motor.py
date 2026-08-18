@@ -40,6 +40,16 @@ def rodar_ciclo(conn, hoje=None):
 
     for planta in db.listar_plantas(conn):
         if db.ja_processado_hoje(conn, planta["id"], hoje_iso):
+            # já rodou hoje pra essa planta: não soma o incremento de novo.
+            # Um lembrete que JÁ existe (evento_calendario_id setado)
+            # continua aparecendo em ainda_atrasadas numa segunda chamada.
+            # Mas se ainda não existe evento, não dá pra saber aqui se a
+            # planta cruzou 100 "limpo" ou se foi adiada na primeira
+            # passada de hoje (depende do clima do momento, que não fica
+            # guardado) — então não reclassificamos como novo aviso numa
+            # segunda chamada: reexpor arriscaria criar um lembrete
+            # duplicado ou desfazer silenciosamente um adiamento já
+            # decidido hoje. O ciclo de amanhã reavalia isso do zero.
             if planta["score"] >= 100 and planta["evento_calendario_id"]:
                 resumo["ainda_atrasadas"].append({
                     "nome": planta["nome"],
@@ -63,8 +73,16 @@ def rodar_ciclo(conn, hoje=None):
         score_projetado = planta["score"] + incremento_base + incremento_clima
 
         adiar = clima.deve_adiar_aviso(score_projetado, clima_hoje)
+        # O score sempre avança pro valor calculado, com piso em 0 (chuva
+        # forte não pode gerar score negativo). "adiar" só controla se a
+        # planta aparece em novos_avisos hoje — não congela o score, senão
+        # ela ficaria travada pra sempre caso a chuva prevista não se
+        # confirme.
         novo_score = max(0.0, score_projetado)
 
+        # O histórico sempre registra o valor CALCULADO (score_projetado,
+        # sem piso), pra manter o registro fiel ao que foi de fato apurado
+        # naquele dia, mesmo que o score aplicado à planta tenha piso em 0.
         db.registrar_historico_score(
             conn, planta["id"], hoje_iso,
             incremento_base, incremento_clima, score_projetado,
@@ -75,6 +93,9 @@ def rodar_ciclo(conn, hoje=None):
 
         if novo_score >= 100:
             if planta["evento_calendario_id"]:
+                # já existe lembrete pra essa planta: um adiamento decidido
+                # agora, sobre a crossing de HOJE, não desfaz um evento que
+                # já estava confirmado de antes.
                 resumo["ainda_atrasadas"].append({
                     "nome": planta["nome"],
                     "score": novo_score,
@@ -91,7 +112,16 @@ def rodar_ciclo(conn, hoje=None):
                 if planta["evento_projetado_id"]:
                     entrada["evento_projetado_id"] = planta["evento_projetado_id"]
                 resumo["novos_avisos"].append(entrada)
-        else:
+        elif not planta["evento_calendario_id"]:
+            # Só simula projeção pra quem ainda não tem lembrete confirmado.
+            # Uma planta que já tem evento_calendario_id pode cair de volta
+            # abaixo de 100 (chuva medida hoje) sem que isso vire uma nova
+            # projeção: os dois campos (evento_calendario_id e
+            # evento_projetado_id) nunca podem ficar preenchidos ao mesmo
+            # tempo pra mesma planta (ver ledger, achado 1 da revisão
+            # final). O evento confirmado continua valendo até `regar()`
+            # limpar ele.
+            #
             # não cruzou hoje: verifica se cruzaria dentro da janela de
             # projeção (2 dias), pra manter o evento "previsão" em dia. A
             # simulação parte do score JÁ ATUALIZADO de hoje (novo_score),

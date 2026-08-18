@@ -436,3 +436,113 @@ def test_rodar_ciclo_cruzamento_real_carrega_evento_projetado_pra_promover(
     assert len(resumo["novos_avisos"]) == 1
     assert resumo["novos_avisos"][0]["evento_projetado_id"] == "projetado-existente"
     assert resumo["projecoes"] == []
+
+
+@patch("motor.config.resolver_coordenadas", return_value=(-23.5, -46.6))
+@patch("motor.clima.buscar_dados_climaticos", return_value=RESPOSTA_PROJECAO_CICLO)
+def test_rodar_ciclo_retencao_substrato_baixa_projeta_cruzamento_mais_cedo(
+    mock_busca, mock_coords
+):
+    # Trava que a retencao_substrato sobrevive à cópia
+    # `{**planta, "score": novo_score}` em rodar_ciclo e chega intacta até
+    # simular_projecao (achado 7 da revisão final).
+    #
+    # Cálculo à mão pra RESPOSTA_PROJECAO_CICLO (umidade_ideal_pct=70 ->
+    # nível 15 -> incremento_base=15/dia; exposicao=10 -> exposicao_fator=1.0;
+    # sem chuva em nenhum dia; score inicial 60):
+    #   hoje (2026-08-18, et0=1.0):
+    #     media (fator 1.0):  incremento_clima=1.5   -> novo_score=76.5
+    #     baixa (fator 1.3):  incremento_clima=1.95  -> novo_score=76.95
+    #   2026-08-19 (et0=5.0):
+    #     media: 76.5 + 15 + 7.5  = 99.0   (ainda < 100)
+    #     baixa: 76.95 + 15 + 9.75 = 101.7  (cruza 100 aqui!)
+    #   2026-08-20 (et0=5.0):
+    #     media: 99.0 + 15 + 7.5 = 121.5   (cruza 100 aqui)
+    # ou seja, com retencao "baixa" a projeção deveria cruzar um dia mais
+    # cedo (2026-08-19) do que com "media" (2026-08-20).
+    conn = _conexao_teste()
+    planta_baixa_id = db.inserir_planta(conn, {
+        **PLANTA_EXEMPLO, "nome": "Costela-de-adao",
+        "umidade_ideal_pct": 70.0, "exposicao": 10, "retencao_substrato": "baixa",
+    })
+    db.atualizar_score(conn, planta_baixa_id, 60)
+
+    resumo = motor.rodar_ciclo(conn, hoje=datetime.date(2026, 8, 18))
+
+    assert len(resumo["projecoes"]) == 1
+    projecao_baixa = resumo["projecoes"][0]
+    assert projecao_baixa["acao"] == "criar"
+    assert projecao_baixa["data_prevista"] == "2026-08-19"
+
+    # confirma que, com "media" (partindo do mesmo score/clima), a projeção
+    # cruzaria só no dia seguinte — provando que o fator de retenção fez
+    # diferença de fato, não é coincidência de arredondamento.
+    conn_media = _conexao_teste()
+    planta_media_id = db.inserir_planta(conn_media, {
+        **PLANTA_EXEMPLO, "nome": "Costela-de-adao",
+        "umidade_ideal_pct": 70.0, "exposicao": 10, "retencao_substrato": "media",
+    })
+    db.atualizar_score(conn_media, planta_media_id, 60)
+
+    resumo_media = motor.rodar_ciclo(conn_media, hoje=datetime.date(2026, 8, 18))
+
+    assert len(resumo_media["projecoes"]) == 1
+    projecao_media = resumo_media["projecoes"][0]
+    assert projecao_media["data_prevista"] == "2026-08-20"
+    assert projecao_media["data_prevista"] != projecao_baixa["data_prevista"]
+
+
+RESPOSTA_CHUVA_FORTE_DERRUBA_ABAIXO_DE_100 = {
+    "daily": {
+        "time": ["2026-08-18", "2026-08-19", "2026-08-20"],
+        # hoje: et0=0 e chuva forte (30mm) derruba o score bem abaixo de
+        # 100. Nos 2 dias seguintes, sem chuva e com et0=0, só o
+        # incremento_base (+10/dia, pela umidade_ideal_pct=60 da
+        # PLANTA_EXEMPLO) empurra o score de volta pra cima de 100 em
+        # 2026-08-20 — o suficiente pra simular_projecao encontrar um
+        # cruzamento, SE a função chegar a rodar.
+        "et0_fao_evapotranspiration": [0.0, 0.0, 0.0],
+        "precipitation_sum": [30.0, 0.0, 0.0],
+        "precipitation_probability_max": [90, 10, 10],
+        "windspeed_10m_max": [5.0, 5.0, 5.0],
+        "uv_index_max": [3.0, 3.0, 3.0],
+        "relative_humidity_2m_mean": [55.0, 55.0, 55.0],
+        "cloudcover_mean": [20.0, 20.0, 20.0],
+    }
+}
+
+
+@patch("motor.config.resolver_coordenadas", return_value=(-23.5, -46.6))
+@patch("motor.clima.buscar_dados_climaticos", return_value=RESPOSTA_CHUVA_FORTE_DERRUBA_ABAIXO_DE_100)
+def test_rodar_ciclo_planta_atrasada_que_cai_abaixo_de_100_nao_gera_projecao(
+    mock_busca, mock_coords
+):
+    # Regressão do achado 1 da revisão final: uma planta que JÁ tem
+    # evento_calendario_id (está atrasada, com lembrete no Calendar) pode
+    # cair de volta abaixo de 100 por causa de chuva medida hoje. Isso não
+    # pode fazer a planta entrar no ramo de projeção e ganhar um
+    # evento_projetado_id ao lado do evento_calendario_id que já existe —
+    # os dois campos nunca podem ficar preenchidos ao mesmo tempo pra
+    # mesma planta.
+    #
+    # Cálculo à mão (PLANTA_EXEMPLO: umidade_ideal_pct=60 -> nível 10 ->
+    # incremento_base=10/dia; exposicao=5 -> exposicao_fator=0.5;
+    # retencao_substrato="media" -> fator 1.0):
+    #   hoje: incremento_clima = et0(0)*... - precipitacao(30)*5*0.5 = -75
+    #         novo_score = 150 + 10 - 75 = 85  (< 100)
+    #   simular_projecao a partir de 85:
+    #     2026-08-19: 85 + 10 + 0 = 95
+    #     2026-08-20: 95 + 10 + 0 = 105  -> cruzaria 100 aqui
+    # ou seja, SEM a guarda do fix, essa planta geraria uma projeção
+    # "criar" pra 2026-08-20 mesmo já tendo evento_calendario_id vivo.
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+    db.atualizar_score(conn, planta_id, 150)
+    db.marcar_evento_calendario(conn, planta_id, "evento-existente")
+
+    resumo = motor.rodar_ciclo(conn, hoje=datetime.date(2026, 8, 18))
+
+    planta = db.obter_planta(conn, "Jiboia")
+    assert planta["score"] == 85
+    assert planta["evento_calendario_id"] == "evento-existente"
+    assert resumo["projecoes"] == []
