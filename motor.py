@@ -7,6 +7,27 @@ import db
 import regras_score
 
 
+def simular_projecao(planta, resposta_clima, hoje):
+    """Simula o score da planta pros dias futuros disponíveis na resposta do
+    Open-Meteo, sem gravar nada em lugar nenhum — usa a mesma fórmula do
+    ciclo real, incluindo a chuva PREVISTA (não medida) pros dias que ainda
+    não aconteceram. Retorna a data ISO em que o score projetado cruzaria
+    100, ou None se não cruza dentro dos dias disponíveis na resposta."""
+    hoje_iso = hoje.isoformat()
+    datas_futuras = sorted(d for d in resposta_clima["daily"]["time"] if d > hoje_iso)
+
+    score = planta["score"]
+    for data_iso in datas_futuras:
+        data = datetime.date.fromisoformat(data_iso)
+        clima_dia = clima.clima_do_dia(resposta_clima, data_iso)
+        incremento_base = regras_score.calcular_incremento_base(planta, data)
+        incremento_clima = clima.calcular_incremento_clima(planta, clima_dia)
+        score = max(0.0, score + incremento_base + incremento_clima)
+        if score >= 100:
+            return data_iso
+    return None
+
+
 def rodar_ciclo(conn, hoje=None):
     hoje = hoje or datetime.date.today()
     hoje_iso = hoje.isoformat()

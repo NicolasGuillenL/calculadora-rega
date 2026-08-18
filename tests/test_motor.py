@@ -287,3 +287,56 @@ def test_rodar_ciclo_segunda_chamada_nao_desfaz_adiamento_da_primeira(
 
     assert resumo_segunda["novos_avisos"] == []
     assert resumo_segunda["adiados"] == []
+
+
+RESPOSTA_PROJECAO_CRUZA_DIA_20 = {
+    "daily": {
+        "time": ["2026-08-17", "2026-08-18", "2026-08-19", "2026-08-20"],
+        "et0_fao_evapotranspiration": [999.0, 999.0, 5.0, 5.0],
+        "precipitation_sum": [0.0, 0.0, 0.0, 0.0],
+        "precipitation_probability_max": [10, 10, 10, 10],
+        "windspeed_10m_max": [5.0, 5.0, 5.0, 5.0],
+        "uv_index_max": [3.0, 3.0, 3.0, 3.0],
+        "relative_humidity_2m_mean": [55.0, 55.0, 55.0, 55.0],
+        "cloudcover_mean": [20.0, 20.0, 20.0, 20.0],
+    }
+}
+
+
+def test_simular_projecao_detecta_cruzamento_em_2_dias():
+    planta = {**PLANTA_EXEMPLO, "umidade_ideal_pct": 70.0, "exposicao": 10, "score": 60}
+
+    data_prevista = motor.simular_projecao(planta, RESPOSTA_PROJECAO_CRUZA_DIA_20, datetime.date(2026, 8, 18))
+
+    assert data_prevista == "2026-08-20"
+
+
+def test_simular_projecao_ignora_dias_passados_e_hoje():
+    # et0 gigante nos dias 17 e 18 (passado/hoje) não pode ser contado —
+    # se fosse, cruzaria no primeiro dia. Só 19 e 20 (futuros) entram.
+    planta = {**PLANTA_EXEMPLO, "umidade_ideal_pct": 70.0, "exposicao": 10, "score": 0}
+
+    data_prevista = motor.simular_projecao(planta, RESPOSTA_PROJECAO_CRUZA_DIA_20, datetime.date(2026, 8, 18))
+
+    # com score 0 e só os 2 dias futuros "fracos" (et0=5.0), não cruza 100
+    assert data_prevista is None
+
+
+def test_simular_projecao_retorna_none_quando_nao_cruza():
+    resposta_fraca = {
+        "daily": {
+            "time": ["2026-08-18", "2026-08-19", "2026-08-20"],
+            "et0_fao_evapotranspiration": [1.0, 1.0, 1.0],
+            "precipitation_sum": [0.0, 0.0, 0.0],
+            "precipitation_probability_max": [10, 10, 10],
+            "windspeed_10m_max": [5.0, 5.0, 5.0],
+            "uv_index_max": [3.0, 3.0, 3.0],
+            "relative_humidity_2m_mean": [55.0, 55.0, 55.0],
+            "cloudcover_mean": [20.0, 20.0, 20.0],
+        }
+    }
+    planta = {**PLANTA_EXEMPLO, "umidade_ideal_pct": 30.0, "exposicao": 5, "score": 0}
+
+    data_prevista = motor.simular_projecao(planta, resposta_fraca, datetime.date(2026, 8, 18))
+
+    assert data_prevista is None
