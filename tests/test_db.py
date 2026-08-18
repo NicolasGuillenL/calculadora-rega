@@ -175,3 +175,35 @@ def test_migrar_schema_v2_adiciona_colunas_novas():
     planta = db.obter_planta(conn, "Jiboia")
     assert planta["retencao_substrato"] == "media"
     assert planta["evento_projetado_id"] is None
+
+
+def test_marcar_e_limpar_evento_projetado():
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+
+    db.marcar_evento_projetado(conn, planta_id, "projetado-123")
+    assert db.obter_planta(conn, "Jiboia")["evento_projetado_id"] == "projetado-123"
+
+    db.limpar_evento_projetado(conn, planta_id)
+    assert db.obter_planta(conn, "Jiboia")["evento_projetado_id"] is None
+
+
+def test_promover_evento_projetado_vira_confirmado_e_limpa_projetado():
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+    db.marcar_evento_projetado(conn, planta_id, "projetado-123")
+
+    db.promover_evento_projetado(conn, planta_id, "projetado-123")
+
+    planta = db.obter_planta(conn, "Jiboia")
+    assert planta["evento_calendario_id"] == "projetado-123"
+    assert planta["evento_projetado_id"] is None
+
+
+def test_atualizar_retencao_substrato():
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+
+    db.atualizar_retencao_substrato(conn, planta_id, "alta")
+
+    assert db.obter_planta(conn, "Jiboia")["retencao_substrato"] == "alta"

@@ -150,6 +150,34 @@ def limpar_evento_calendario(conn, planta_id):
     marcar_evento_calendario(conn, planta_id, None)
 
 
+def marcar_evento_projetado(conn, planta_id, evento_id):
+    cur = conn.cursor()
+    cur.execute("UPDATE plantas SET evento_projetado_id = ? WHERE id = ?", (evento_id, planta_id))
+    conn.commit()
+
+
+def limpar_evento_projetado(conn, planta_id):
+    marcar_evento_projetado(conn, planta_id, None)
+
+
+def promover_evento_projetado(conn, planta_id, evento_id):
+    """Confirma um evento que estava projetado: ele vira o evento oficial
+    (evento_calendario_id) e o campo de projeção é limpo — mesmo evento no
+    Calendar, sem criar um novo nem cancelar o antigo."""
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE plantas SET evento_calendario_id = ?, evento_projetado_id = NULL WHERE id = ?",
+        (evento_id, planta_id),
+    )
+    conn.commit()
+
+
+def atualizar_retencao_substrato(conn, planta_id, novo_valor):
+    cur = conn.cursor()
+    cur.execute("UPDATE plantas SET retencao_substrato = ? WHERE id = ?", (novo_valor, planta_id))
+    conn.commit()
+
+
 def registrar_historico_score(conn, planta_id, data, incremento_base, incremento_clima, score_final, et0, precipitacao_mm):
     cur = conn.cursor()
     cur.execute(
