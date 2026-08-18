@@ -1,5 +1,8 @@
 import datetime
+import runpy
 import sqlite3
+import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -55,3 +58,17 @@ def test_regar_planta_inexistente_gera_erro():
     conn = _conexao_teste()
     with pytest.raises(ValueError):
         regar.regar(conn, "Não existe")
+
+
+def test_cli_avisa_que_evento_do_calendario_precisa_ser_apagado(capsys):
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+    db.atualizar_score(conn, planta_id, 135)
+    db.marcar_evento_calendario(conn, planta_id, "evento-abc")
+
+    with patch("db.conectar", return_value=conn), patch.object(sys, "argv", ["regar.py", "Jiboia"]):
+        runpy.run_module("regar", run_name="__main__")
+
+    saida = capsys.readouterr().out
+    assert "evento-abc" in saida
+    assert "Calendar" in saida

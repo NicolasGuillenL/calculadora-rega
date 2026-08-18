@@ -34,3 +34,12 @@ if __name__ == "__main__":
     conexao = db.conectar()
     resultado = regar(conexao, sys.argv[1])
     print(json.dumps(resultado, ensure_ascii=False, indent=2))
+
+    if resultado["evento_calendario_id_removido"] is not None:
+        print(
+            "\nATENÇÃO: o evento "
+            f'"{resultado["evento_calendario_id_removido"]}" ainda existe no '
+            "Google Calendar. Este script não apaga eventos (isso acontece na "
+            "camada do agente, não aqui) — peça pro Claude apagar esse evento "
+            "manualmente."
+        )
