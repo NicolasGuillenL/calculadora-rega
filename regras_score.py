@@ -1,11 +1,5 @@
 """Regras que definem quanto cada atributo da planta soma ao score por dia."""
 
-NIVEIS_UMIDADE = [
-    (65, float("inf"), 15),
-    (45, 64.999, 10),
-    (0, 44.999, 6),
-]
-
 FATOR_POR_NIVEL = {15: 1.5, 10: 1.0, 6: 0.5}
 
 ESTACOES_POR_MES = {
