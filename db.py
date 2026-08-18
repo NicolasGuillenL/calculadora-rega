@@ -144,3 +144,9 @@ def registrar_rega(conn, planta_id, data, score_no_momento):
     )
     cur.execute("UPDATE plantas SET ultima_rega = ? WHERE id = ?", (data, planta_id))
     conn.commit()
+
+
+def atualizar_exposicao(conn, planta_id, nova_exposicao):
+    cur = conn.cursor()
+    cur.execute("UPDATE plantas SET exposicao = ? WHERE id = ?", (nova_exposicao, planta_id))
+    conn.commit()

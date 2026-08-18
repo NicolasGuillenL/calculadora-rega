@@ -100,3 +100,12 @@ def test_registrar_rega():
     cur = conn.cursor()
     cur.execute("SELECT score_no_momento FROM historico_regas WHERE planta_id = ?", (planta_id,))
     assert cur.fetchall()[0][0] == 130
+
+
+def test_atualizar_exposicao():
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+
+    db.atualizar_exposicao(conn, planta_id, 10)
+
+    assert db.obter_planta(conn, "Jiboia")["exposicao"] == 10
