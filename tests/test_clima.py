@@ -1,5 +1,7 @@
 from unittest.mock import Mock, patch
 
+import requests
+
 import clima
 
 RESPOSTA_API_EXEMPLO = {
@@ -41,6 +43,39 @@ def test_buscar_dados_climaticos_faz_request_correto(mock_get):
     args, kwargs = mock_get.call_args
     assert kwargs["params"]["latitude"] == -23.5
     assert kwargs["params"]["longitude"] == -46.6
+
+
+@patch("clima.time.sleep")
+@patch("clima.requests.get")
+def test_buscar_dados_climaticos_tenta_de_novo_apos_falha_de_rede(mock_get, mock_sleep):
+    mock_resposta_ok = Mock()
+    mock_resposta_ok.json.return_value = RESPOSTA_API_EXEMPLO
+    mock_resposta_ok.raise_for_status.return_value = None
+    mock_get.side_effect = [
+        requests.exceptions.ReadTimeout("timeout simulado"),
+        mock_resposta_ok,
+    ]
+
+    resultado = clima.buscar_dados_climaticos(-23.5, -46.6)
+
+    assert resultado == RESPOSTA_API_EXEMPLO
+    assert mock_get.call_count == 2
+    mock_sleep.assert_called_once()
+
+
+@patch("clima.time.sleep")
+@patch("clima.requests.get")
+def test_buscar_dados_climaticos_desiste_apos_esgotar_tentativas(mock_get, mock_sleep):
+    mock_get.side_effect = requests.exceptions.ReadTimeout("timeout simulado")
+
+    try:
+        clima.buscar_dados_climaticos(-23.5, -46.6)
+        assert False, "deveria ter levantado a exceção"
+    except requests.exceptions.ReadTimeout:
+        pass
+
+    assert mock_get.call_count == clima.TENTATIVAS_REQUEST
+    assert mock_sleep.call_count == clima.TENTATIVAS_REQUEST - 1
 
 
 def _clima_seco_e_quente():

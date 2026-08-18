@@ -1,7 +1,30 @@
 """Integração com a API gratuita do Open-Meteo e cálculo do modificador climático."""
+import time
+
 import requests
 
 import regras_score
+
+# A automação roda 1x/dia, sem supervisão — uma falha de rede passageira não
+# pode derrubar o ciclo inteiro. Poucas tentativas com espera curta bastam
+# pra absorver instabilidade momentânea da API sem atrasar o ciclo por muito
+# tempo.
+TENTATIVAS_REQUEST = 3
+ESPERA_ENTRE_TENTATIVAS_S = 2
+
+
+def _get_com_retry(url, params, tentativas=TENTATIVAS_REQUEST, espera_s=ESPERA_ENTRE_TENTATIVAS_S):
+    ultimo_erro = None
+    for tentativa in range(1, tentativas + 1):
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+            resp.raise_for_status()
+            return resp
+        except requests.exceptions.RequestException as erro:
+            ultimo_erro = erro
+            if tentativa < tentativas:
+                time.sleep(espera_s)
+    raise ultimo_erro
 
 VARIAVEIS_DIARIAS = [
     "et0_fao_evapotranspiration",
@@ -30,12 +53,10 @@ LIMIAR_ALIVIO_CHUVA_INDOOR_MAX = 3.0
 
 
 def geocode_cidade(cidade):
-    resp = requests.get(
+    resp = _get_com_retry(
         "https://geocoding-api.open-meteo.com/v1/search",
         params={"name": cidade, "count": 1, "language": "pt"},
-        timeout=10,
     )
-    resp.raise_for_status()
     resultados = resp.json().get("results")
     if not resultados:
         raise ValueError(f"Não encontrei coordenadas para a cidade '{cidade}'.")
@@ -43,7 +64,7 @@ def geocode_cidade(cidade):
 
 
 def buscar_dados_climaticos(lat, lon, dias_passados=1, dias_futuros=2):
-    resp = requests.get(
+    resp = _get_com_retry(
         "https://api.open-meteo.com/v1/forecast",
         params={
             "latitude": lat,
@@ -53,9 +74,7 @@ def buscar_dados_climaticos(lat, lon, dias_passados=1, dias_futuros=2):
             "past_days": dias_passados,
             "forecast_days": dias_futuros,
         },
-        timeout=10,
     )
-    resp.raise_for_status()
     return resp.json()
 
 
