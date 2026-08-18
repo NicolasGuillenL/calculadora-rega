@@ -17,6 +17,7 @@ Objetivo: substituir o controle manual de "próxima rega" por um sistema de **sc
 - Confirmação de rega: função explícita (`regar("nome_planta")`) chamada pelo usuário — não há fluxo de confirmação interativa via chat na v1.
 - Motor de score: tabela de regras por atributo (não uma fórmula única de caixa-preta) — cada atributo do perfil da planta contribui com pontos/dia de forma explícita e editável.
 - Clima: usar o máximo de variáveis disponíveis no Open-Meteo (gratuito, sem chave), com `et0_fao_evapotranspiration` como eixo principal e as demais como ajustes finos.
+- Avisos: além de push/e-mail (nativo das tarefas agendadas do Claude), cada planta que precisa de rega ganha um evento no Google Calendar do usuário, removido automaticamente quando a planta é regada.
 
 ## Modelo de dados (Turso / SQLite)
 
@@ -37,6 +38,7 @@ CREATE TABLE plantas (
     cidade TEXT NOT NULL,                  -- localização usada para o clima desta planta
     score REAL NOT NULL DEFAULT 0,
     ultima_rega TEXT,                      -- data ISO (YYYY-MM-DD)
+    evento_calendario_id TEXT,             -- id do evento no Google Calendar aberto para esta planta (NULL se não há aviso pendente)
     criado_em TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -99,13 +101,15 @@ Score final do dia = `score_anterior + incremento_base + incremento_clima`, sem 
 
 ### 3. Regar
 
-`regar(nome_planta)`: zera o score, grava `ultima_rega = hoje`, insere linha em `historico_regas` com o score que a planta tinha antes de zerar (para dar visibilidade de quão atrasada estava).
+`regar(nome_planta)`: zera o score, grava `ultima_rega = hoje`, insere linha em `historico_regas` com o score que a planta tinha antes de zerar (para dar visibilidade de quão atrasada estava), e se houver `evento_calendario_id` associado, remove o evento do Google Calendar e limpa o campo.
 
 ## Automação e avisos
 
 - Tarefa agendada do Claude, 1x/dia: para cada planta, busca clima da cidade configurada, recalcula o score (base + clima), grava em `historico_scores`, atualiza `plantas.score`.
-- Se `score ≥ 100`: dispara notificação (push/e-mail via tarefas agendadas do Claude) listando as plantas que precisam de água.
-- Não há flag de "já avisado hoje" separada — a notificação diária simplesmente lista todas as plantas com `score ≥ 100` no momento; se a planta não foi regada, ela aparece nos avisos seguintes automaticamente, com o score cada vez maior indicando o atraso.
+- Se `score ≥ 100` e a planta **ainda não tem** `evento_calendario_id` (ou seja, é a primeira vez que ela cruza o limite desde a última rega): dispara notificação (push/e-mail via tarefas agendadas do Claude) **e** cria um evento no Google Calendar do usuário ("💧 Regar: <planta>", no dia corrente, com uma breve descrição do score), guardando o id retornado em `evento_calendario_id`.
+- Se `score ≥ 100` e a planta **já tem** `evento_calendario_id` (segue atrasada de dias anteriores): não cria um evento novo — evita poluir a agenda com duplicatas. Opcionalmente atualiza a descrição do evento existente com o score/atraso mais recente.
+- Quando a planta é regada (`regar()`), o evento correspondente é removido da agenda — fecha o ciclo sem deixar lembrete morto.
+- Não há flag separada de "já avisado hoje" para o push/e-mail — a notificação diária simplesmente lista todas as plantas com `score ≥ 100` no momento; é o `evento_calendario_id` que evita duplicação especificamente na agenda.
 
 ## Estrutura de código
 
@@ -114,6 +118,7 @@ calculadora-rega/
   db.py            # conexão Turso, criação de tabelas, CRUD de plantas/histórico
   regras_score.py  # tabela de regras do incremento base por atributo
   clima.py         # geocoding + forecast do Open-Meteo, cálculo do incremento climático
+  calendario.py    # criação/remoção de eventos no Google Calendar (via conector já disponível)
   motor.py         # roda 1x/dia: calcula score de cada planta, decide quem avisar
   regar.py         # função regar(nome_planta)
   main.py          # ponto de entrada da tarefa agendada
