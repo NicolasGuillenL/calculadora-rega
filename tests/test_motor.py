@@ -220,7 +220,37 @@ def test_rodar_ciclo_segunda_chamada_no_mesmo_dia_nao_altera_score(mock_clima_di
 @patch("motor.config.resolver_coordenadas", return_value=(-23.5, -46.6))
 @patch("motor.clima.buscar_dados_climaticos", return_value={"daily": {"time": ["2026-08-18"]}})
 @patch("motor.clima.clima_do_dia", return_value=CLIMA_NEUTRO)
-def test_rodar_ciclo_segunda_chamada_ainda_mostra_aviso_pendente(mock_clima_dia, mock_busca, mock_coords):
+def test_rodar_ciclo_segunda_chamada_ainda_mostra_aviso_ja_existente(mock_clima_dia, mock_busca, mock_coords):
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+    db.atualizar_score(conn, planta_id, 120)
+    db.marcar_evento_calendario(conn, planta_id, "evento-existente")
+
+    motor.rodar_ciclo(conn, hoje=datetime.date(2026, 8, 18))
+    resumo_segunda = motor.rodar_ciclo(conn, hoje=datetime.date(2026, 8, 18))
+
+    # um lembrete que JÁ tem evento no calendário continua aparecendo numa
+    # segunda chamada no mesmo dia — não é escondido.
+    assert resumo_segunda["atualizadas"] == []
+    assert resumo_segunda["novos_avisos"] == []
+    assert len(resumo_segunda["ainda_atrasadas"]) == 1
+    assert resumo_segunda["ainda_atrasadas"][0]["evento_calendario_id"] == "evento-existente"
+
+
+@patch("motor.config.resolver_coordenadas", return_value=(-23.5, -46.6))
+@patch("motor.clima.buscar_dados_climaticos", return_value={"daily": {"time": ["2026-08-18"]}})
+@patch("motor.clima.clima_do_dia", return_value=CLIMA_NEUTRO)
+def test_rodar_ciclo_segunda_chamada_nao_reexpoe_planta_sem_evento_ainda(
+    mock_clima_dia, mock_busca, mock_coords
+):
+    # Uma planta que cruzou 100 na primeira chamada de hoje mas ainda não
+    # tem evento_calendario_id (porque o agente ainda não processou o
+    # aviso, ou porque ela tinha sido adiada) não pode ser reclassificada
+    # como "novo aviso" numa segunda chamada no mesmo dia: não dá pra saber
+    # aqui se ela foi adiada ou não sem refazer o cálculo do clima, e
+    # reexpor arriscaria criar um lembrete duplicado ou ignorar um
+    # adiamento decidido mais cedo hoje (ver ledger, achado da revisão
+    # final). O ciclo de amanhã reavalia isso do zero.
     conn = _conexao_teste()
     planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
     db.atualizar_score(conn, planta_id, 95)
@@ -229,5 +259,30 @@ def test_rodar_ciclo_segunda_chamada_ainda_mostra_aviso_pendente(mock_clima_dia,
     resumo_segunda = motor.rodar_ciclo(conn, hoje=datetime.date(2026, 8, 18))
 
     assert resumo_segunda["atualizadas"] == []
-    assert len(resumo_segunda["novos_avisos"]) == 1
-    assert resumo_segunda["novos_avisos"][0]["nome"] == "Jiboia"
+    assert resumo_segunda["novos_avisos"] == []
+    assert resumo_segunda["adiados"] == []
+    assert resumo_segunda["ainda_atrasadas"] == []
+
+
+@patch("motor.config.resolver_coordenadas", return_value=(-23.5, -46.6))
+@patch("motor.clima.buscar_dados_climaticos", return_value={"daily": {"time": ["2026-08-18"]}})
+@patch("motor.clima.clima_do_dia", return_value=CLIMA_NEUTRO)
+@patch("motor.clima.deve_adiar_aviso", return_value=True)
+def test_rodar_ciclo_segunda_chamada_nao_desfaz_adiamento_da_primeira(
+    mock_adiar, mock_clima_dia, mock_busca, mock_coords
+):
+    # Regressão do achado da revisão final: se a primeira chamada de hoje
+    # adiou o aviso (foi pra "adiados", sem criar evento), uma segunda
+    # chamada no mesmo dia não pode "vazar" essa planta pra novos_avisos —
+    # isso derrubaria o próprio propósito do adiamento.
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+    db.atualizar_score(conn, planta_id, 95)
+
+    resumo_primeira = motor.rodar_ciclo(conn, hoje=datetime.date(2026, 8, 18))
+    assert len(resumo_primeira["adiados"]) == 1
+
+    resumo_segunda = motor.rodar_ciclo(conn, hoje=datetime.date(2026, 8, 18))
+
+    assert resumo_segunda["novos_avisos"] == []
+    assert resumo_segunda["adiados"] == []

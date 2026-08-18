@@ -16,22 +16,23 @@ def rodar_ciclo(conn, hoje=None):
 
     for planta in db.listar_plantas(conn):
         if db.ja_processado_hoje(conn, planta["id"], hoje_iso):
-            # já rodou hoje pra essa planta: não soma o incremento de novo,
-            # mas um lembrete pendente real não pode ficar escondido numa
-            # segunda chamada do ciclo no mesmo dia.
-            if planta["score"] >= 100:
-                if planta["evento_calendario_id"]:
-                    resumo["ainda_atrasadas"].append({
-                        "nome": planta["nome"],
-                        "score": planta["score"],
-                        "evento_calendario_id": planta["evento_calendario_id"],
-                    })
-                else:
-                    resumo["novos_avisos"].append({
-                        "nome": planta["nome"],
-                        "score": planta["score"],
-                        "planta_id": planta["id"],
-                    })
+            # já rodou hoje pra essa planta: não soma o incremento de novo.
+            # Um lembrete que JÁ existe (evento_calendario_id setado) não
+            # pode ficar escondido numa segunda chamada do ciclo no mesmo
+            # dia — continua aparecendo em ainda_atrasadas. Mas se ainda não
+            # existe evento, não dá pra saber aqui se a planta cruzou 100
+            # "limpo" ou se foi adiada na primeira passada de hoje (essa
+            # decisão dependeu do clima do momento, que não fica guardado) —
+            # então não reclassificamos como novo aviso numa segunda
+            # chamada: reexpor arriscaria criar um lembrete duplicado ou
+            # ignorar um adiamento que já tinha sido decidido hoje. O ciclo
+            # de amanhã reavalia isso do zero.
+            if planta["score"] >= 100 and planta["evento_calendario_id"]:
+                resumo["ainda_atrasadas"].append({
+                    "nome": planta["nome"],
+                    "score": planta["score"],
+                    "evento_calendario_id": planta["evento_calendario_id"],
+                })
             continue
 
         cidade = planta["cidade"]
