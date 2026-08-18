@@ -30,6 +30,31 @@ def test_clima_do_dia_encontra_a_data_certa():
     assert dia["nebulosidade_pct"] == 10.0
 
 
+def test_clima_do_dia_trata_valores_nulos_da_api_sem_quebrar():
+    resposta_com_nulos = {
+        "daily": {
+            "time": ["2026-08-18"],
+            "et0_fao_evapotranspiration": [None],
+            "precipitation_sum": [None],
+            "precipitation_probability_max": [None],
+            "windspeed_10m_max": [None],
+            "uv_index_max": [None],
+            "relative_humidity_2m_mean": [None],
+            "cloudcover_mean": [None],
+        }
+    }
+
+    dia = clima.clima_do_dia(resposta_com_nulos, "2026-08-18")
+
+    assert dia["et0"] == 0.0
+    assert dia["precipitacao_mm"] == 0.0
+    assert dia["probabilidade_chuva_pct"] == 0
+    assert dia["windspeed_10m_max"] == 0.0
+    assert dia["uv_index_max"] == 0.0
+    assert dia["umidade_relativa_pct"] == 0.0
+    assert dia["nebulosidade_pct"] == 0.0
+
+
 @patch("clima.requests.get")
 def test_buscar_dados_climaticos_faz_request_correto(mock_get):
     mock_resposta = Mock()

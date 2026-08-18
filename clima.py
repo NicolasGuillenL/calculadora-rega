@@ -82,13 +82,13 @@ def clima_do_dia(resposta_api, data_iso):
     diario = resposta_api["daily"]
     idx = diario["time"].index(data_iso)
     return {
-        "et0": diario["et0_fao_evapotranspiration"][idx],
+        "et0": diario["et0_fao_evapotranspiration"][idx] or 0.0,
         "precipitacao_mm": diario["precipitation_sum"][idx] or 0.0,
         "probabilidade_chuva_pct": diario["precipitation_probability_max"][idx] or 0,
         "windspeed_10m_max": diario["windspeed_10m_max"][idx] or 0.0,
         "uv_index_max": diario["uv_index_max"][idx] or 0.0,
-        "umidade_relativa_pct": diario["relative_humidity_2m_mean"][idx],
-        "nebulosidade_pct": diario["cloudcover_mean"][idx],
+        "umidade_relativa_pct": diario["relative_humidity_2m_mean"][idx] or 0.0,
+        "nebulosidade_pct": diario["cloudcover_mean"][idx] or 0.0,
     }
 
 
