@@ -26,7 +26,7 @@ SCORE_PROJETADO_ADIA = 90
 # limitado, para nunca se aproximar do efeito que a chuva teria numa planta
 # exposta (ver LIMIAR_ALIVIO_CHUVA_INDOOR_MAX abaixo).
 FATOR_ALIVIO_CHUVA_INDOOR = 0.5
-LIMIAR_ALIVIO_CHUVA_INDOOR_MAX = 2.0
+LIMIAR_ALIVIO_CHUVA_INDOOR_MAX = 3.0
 
 
 def geocode_cidade(cidade):

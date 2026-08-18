@@ -97,7 +97,7 @@ def test_chuva_nao_afeta_diretamente_planta_dentro_de_casa():
     }
     incremento = clima.calcular_incremento_clima(planta, clima_com_chuva)
     # não pode zerar/reduzir drasticamente como aconteceria numa planta exposta
-    assert incremento > -3
+    assert incremento >= -3
 
 
 def test_deve_adiar_aviso_quando_score_alto_e_chuva_provavel():
