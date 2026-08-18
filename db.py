@@ -145,6 +145,15 @@ def registrar_historico_score(conn, planta_id, data, incremento_base, incremento
     conn.commit()
 
 
+def ja_processado_hoje(conn, planta_id, data):
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT 1 FROM historico_scores WHERE planta_id = ? AND data = ?",
+        (planta_id, data),
+    )
+    return cur.fetchall() != []
+
+
 def registrar_rega(conn, planta_id, data, score_no_momento):
     cur = conn.cursor()
     cur.execute(

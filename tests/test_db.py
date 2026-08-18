@@ -104,6 +104,26 @@ def test_registrar_rega():
     assert cur.fetchall()[0][0] == 130
 
 
+def test_ja_processado_hoje_false_quando_nao_ha_historico():
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+
+    assert db.ja_processado_hoje(conn, planta_id, "2026-08-18") is False
+
+
+def test_ja_processado_hoje_true_apos_registrar_historico():
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+    db.registrar_historico_score(
+        conn, planta_id, "2026-08-18",
+        incremento_base=10, incremento_clima=3.5,
+        score_final=13.5, et0=4.2, precipitacao_mm=0,
+    )
+
+    assert db.ja_processado_hoje(conn, planta_id, "2026-08-18") is True
+    assert db.ja_processado_hoje(conn, planta_id, "2026-08-19") is False
+
+
 def test_conectar_sem_env_vars_gera_erro_claro(monkeypatch):
     monkeypatch.delenv("TURSO_DATABASE_URL", raising=False)
     monkeypatch.delenv("TURSO_AUTH_TOKEN", raising=False)
