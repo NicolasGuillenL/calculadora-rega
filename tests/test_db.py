@@ -1,5 +1,7 @@
 import sqlite3
 
+import pytest
+
 import db
 
 PLANTA_EXEMPLO = {
@@ -100,6 +102,14 @@ def test_registrar_rega():
     cur = conn.cursor()
     cur.execute("SELECT score_no_momento FROM historico_regas WHERE planta_id = ?", (planta_id,))
     assert cur.fetchall()[0][0] == 130
+
+
+def test_conectar_sem_env_vars_gera_erro_claro(monkeypatch):
+    monkeypatch.delenv("TURSO_DATABASE_URL", raising=False)
+    monkeypatch.delenv("TURSO_AUTH_TOKEN", raising=False)
+
+    with pytest.raises(RuntimeError, match="TURSO_DATABASE_URL"):
+        db.conectar()
 
 
 def test_atualizar_exposicao():

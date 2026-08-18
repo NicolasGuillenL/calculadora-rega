@@ -9,8 +9,17 @@ load_dotenv()
 
 def conectar():
     """Conecta no banco Turso configurado nas variáveis de ambiente."""
-    url = os.environ["TURSO_DATABASE_URL"]
-    token = os.environ["TURSO_AUTH_TOKEN"]
+    try:
+        url = os.environ["TURSO_DATABASE_URL"]
+        token = os.environ["TURSO_AUTH_TOKEN"]
+    except KeyError as erro:
+        variavel = erro.args[0]
+        raise RuntimeError(
+            f"Variável de ambiente '{variavel}' não está definida. "
+            "Configure TURSO_DATABASE_URL e TURSO_AUTH_TOKEN (por exemplo, "
+            "num arquivo .env ou nas variáveis exportadas pela tarefa "
+            "agendada) antes de conectar no banco."
+        ) from erro
     return libsql.connect(database=url, auth_token=token)
 
 
