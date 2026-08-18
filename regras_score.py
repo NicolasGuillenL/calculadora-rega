@@ -16,9 +16,12 @@ ESTACOES_POR_MES = {
 
 
 def nivel_umidade(umidade_pct):
-    for minimo, maximo, valor in NIVEIS_UMIDADE:
-        if minimo <= umidade_pct <= maximo:
-            return valor
+    if umidade_pct >= 65:
+        return 15
+    if umidade_pct >= 45:
+        return 10
+    if umidade_pct >= 0:
+        return 6
     raise ValueError(f"umidade fora do intervalo esperado: {umidade_pct}")
 
 

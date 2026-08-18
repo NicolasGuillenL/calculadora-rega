@@ -46,3 +46,15 @@ def test_incremento_base_com_todas_as_epocas_batendo():
     planta = {"umidade_ideal_pct": 70, "crescimento": "Inverno", "crescimento2": "Inverno", "florescimento": "Inverno"}
     # 15 (umidade) + 5 (crescimento) + 5 (crescimento2) + 3 (florescimento)
     assert regras_score.calcular_incremento_base(planta, datetime.date(2026, 8, 18)) == 28
+
+
+def test_nivel_umidade_valores_no_gap_do_ponto_flutuante():
+    # Valores que anteriormente estavam no gap agora caem nos tiers corretos
+    assert regras_score.nivel_umidade(64.9995) == 10  # Entre 45 e 65
+    assert regras_score.nivel_umidade(44.9999) == 6   # Entre 0 e 45
+
+
+def test_nivel_umidade_fora_do_intervalo_levanta_erro():
+    import pytest
+    with pytest.raises(ValueError):
+        regras_score.nivel_umidade(-1)
