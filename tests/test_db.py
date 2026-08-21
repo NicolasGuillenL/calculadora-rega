@@ -102,6 +102,42 @@ def test_registrar_rega():
     assert cur.fetchall()[0][0] == 130
 
 
+def test_marcar_e_limpar_evento_projetado():
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+
+    db.marcar_evento_projetado(conn, planta_id, "previsao-123")
+    assert db.obter_planta(conn, "Jiboia")["evento_projetado_id"] == "previsao-123"
+
+    db.limpar_evento_projetado(conn, planta_id)
+    assert db.obter_planta(conn, "Jiboia")["evento_projetado_id"] is None
+
+
+def test_promover_evento_projetado_vira_evento_calendario():
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+    db.marcar_evento_projetado(conn, planta_id, "previsao-123")
+
+    db.promover_evento_projetado(conn, planta_id, "previsao-123")
+
+    planta = db.obter_planta(conn, "Jiboia")
+    assert planta["evento_calendario_id"] == "previsao-123"
+    assert planta["evento_projetado_id"] is None
+
+
+def test_promover_evento_projetado_ignora_id_que_nao_bate():
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+    db.marcar_evento_projetado(conn, planta_id, "previsao-123")
+
+    # id errado (ex: previsão já tinha sido substituída) não deve promover
+    db.promover_evento_projetado(conn, planta_id, "previsao-outra")
+
+    planta = db.obter_planta(conn, "Jiboia")
+    assert planta["evento_calendario_id"] is None
+    assert planta["evento_projetado_id"] == "previsao-123"
+
+
 def test_atualizar_exposicao():
     conn = _conexao_teste()
     planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)

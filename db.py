@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS plantas (
     score REAL NOT NULL DEFAULT 0,
     ultima_rega TEXT,
     evento_calendario_id TEXT,
+    evento_projetado_id TEXT,
     criado_em TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -69,7 +70,18 @@ def criar_schema(conn):
         instrucao = instrucao.strip()
         if instrucao:
             cur.execute(instrucao)
+    # Bancos criados antes deste campo existir não ganham a coluna nova só
+    # por causa do "CREATE TABLE IF NOT EXISTS" acima (ele não altera tabela
+    # já existente) — então garantimos aqui, sem apagar nada.
+    _garantir_coluna(cur, "plantas", "evento_projetado_id", "TEXT")
     conn.commit()
+
+
+def _garantir_coluna(cur, tabela, coluna, tipo_sql):
+    cur.execute(f"PRAGMA table_info({tabela})")
+    colunas_existentes = {linha[1] for linha in cur.fetchall()}
+    if coluna not in colunas_existentes:
+        cur.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo_sql}")
 
 
 def _linha_para_dict(cursor, linha):
@@ -117,6 +129,35 @@ def marcar_evento_calendario(conn, planta_id, evento_id):
 
 def limpar_evento_calendario(conn, planta_id):
     marcar_evento_calendario(conn, planta_id, None)
+
+
+def marcar_evento_projetado(conn, planta_id, evento_id):
+    """Guarda o id do evento de 'previsão' (🌦️) criado no Calendar pra essa
+    planta — usado antes de ela cruzar o score de rega de verdade."""
+    cur = conn.cursor()
+    cur.execute("UPDATE plantas SET evento_projetado_id = ? WHERE id = ?", (evento_id, planta_id))
+    conn.commit()
+
+
+def limpar_evento_projetado(conn, planta_id):
+    marcar_evento_projetado(conn, planta_id, None)
+
+
+def promover_evento_projetado(conn, planta_id, evento_projetado_id):
+    """Confirma que a previsão virou aviso de verdade: o evento que estava
+    marcado como 'previsão' passa a ser o evento_calendario_id oficial.
+
+    Chame isso DEPOIS de já ter atualizado o evento no Google Calendar
+    (título, descrição e data de hoje) — esta função só atualiza o banco.
+    """
+    cur = conn.cursor()
+    cur.execute(
+        """UPDATE plantas
+           SET evento_calendario_id = ?, evento_projetado_id = NULL
+           WHERE id = ? AND evento_projetado_id = ?""",
+        (evento_projetado_id, planta_id, evento_projetado_id),
+    )
+    conn.commit()
 
 
 def registrar_historico_score(conn, planta_id, data, incremento_base, incremento_clima, score_final, et0, precipitacao_mm):

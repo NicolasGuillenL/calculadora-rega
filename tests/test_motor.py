@@ -110,3 +110,134 @@ def test_rodar_ciclo_adiado_grava_historico_calculado_mas_nao_muda_score(
     # não o valor efetivamente aplicado (que ficou igual ao anterior)
     assert score_final_historico != 50
     assert score_final_historico > 50
+
+
+@patch("motor.config.resolver_coordenadas", return_value=(-23.5, -46.6))
+@patch("motor.clima.buscar_dados_climaticos", return_value={"daily": {"time": ["2026-08-18"]}})
+@patch("motor.clima.clima_do_dia", return_value=CLIMA_NEUTRO)
+@patch("motor.clima.deve_adiar_aviso", return_value=True)
+def test_rodar_ciclo_entra_em_adiados_quando_cruzaria_100(
+    mock_adiar, mock_clima_dia, mock_busca, mock_coords
+):
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+    db.atualizar_score(conn, planta_id, 95)  # 95 + 11 (base+clima neutro) = 106
+
+    resumo = motor.rodar_ciclo(conn, hoje=datetime.date(2026, 8, 18))
+
+    assert resumo["novos_avisos"] == []
+    assert resumo["ainda_atrasadas"] == []
+    assert len(resumo["adiados"]) == 1
+    assert resumo["adiados"][0]["nome"] == "Jiboia"
+    assert resumo["adiados"][0]["score"] >= 100
+    # o score aplicado à planta continua congelado (comportamento já testado
+    # acima) — aqui só confirmamos que ela é reportada como "adiada"
+    assert db.obter_planta(conn, "Jiboia")["score"] == 95
+
+
+@patch("motor.config.resolver_coordenadas", return_value=(-23.5, -46.6))
+@patch("motor.clima.buscar_dados_climaticos", return_value={"daily": {"time": ["2026-08-18"]}})
+@patch("motor.clima.clima_do_dia", return_value=CLIMA_NEUTRO)
+def test_rodar_ciclo_novo_aviso_confirma_evento_projetado(mock_clima_dia, mock_busca, mock_coords):
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+    db.atualizar_score(conn, planta_id, 95)
+    db.marcar_evento_projetado(conn, planta_id, "previsao-999")
+
+    resumo = motor.rodar_ciclo(conn, hoje=datetime.date(2026, 8, 18))
+
+    assert len(resumo["novos_avisos"]) == 1
+    assert resumo["novos_avisos"][0]["evento_projetado_id"] == "previsao-999"
+
+
+# --- projeções (agenda proativa) ---------------------------------------
+
+RESPOSTA_SECA = {
+    "daily": {
+        "time": ["2026-08-18", "2026-08-19", "2026-08-20"],
+        "et0_fao_evapotranspiration": [5.0, 5.0, 5.0],
+        "precipitation_sum": [0.0, 0.0, 0.0],
+        "precipitation_probability_max": [10, 10, 10],
+        "windspeed_10m_max": [5.0, 5.0, 5.0],
+        "uv_index_max": [3.0, 3.0, 3.0],
+        "relative_humidity_2m_mean": [55.0, 55.0, 55.0],
+        "cloudcover_mean": [20.0, 20.0, 20.0],
+    }
+}
+
+RESPOSTA_CHUVA_FUTURA = {
+    "daily": {
+        "time": ["2026-08-18", "2026-08-19", "2026-08-20"],
+        "et0_fao_evapotranspiration": [5.0, 5.0, 5.0],
+        "precipitation_sum": [0.0, 30.0, 30.0],
+        "precipitation_probability_max": [10, 80, 80],
+        "windspeed_10m_max": [5.0, 5.0, 5.0],
+        "uv_index_max": [3.0, 3.0, 3.0],
+        "relative_humidity_2m_mean": [55.0, 55.0, 55.0],
+        "cloudcover_mean": [20.0, 20.0, 20.0],
+    }
+}
+
+
+@patch("motor.config.resolver_coordenadas", return_value=(-23.5, -46.6))
+@patch("motor.clima.buscar_dados_climaticos", return_value=RESPOSTA_SECA)
+def test_rodar_ciclo_projeta_criar_quando_vai_cruzar_100_na_janela(mock_busca, mock_coords):
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+    db.atualizar_score(conn, planta_id, 70)  # some+12.5/dia sem chuva cruza 100 em 2 dias
+
+    resumo = motor.rodar_ciclo(conn, hoje=datetime.date(2026, 8, 18))
+
+    assert resumo["novos_avisos"] == []
+    assert len(resumo["projecoes"]) == 1
+    projecao = resumo["projecoes"][0]
+    assert projecao["nome"] == "Jiboia"
+    assert projecao["acao"] == "criar"
+    assert projecao["data_prevista"] == "2026-08-20"
+    assert "evento_projetado_id" not in projecao
+
+
+@patch("motor.config.resolver_coordenadas", return_value=(-23.5, -46.6))
+@patch("motor.clima.buscar_dados_climaticos", return_value=RESPOSTA_SECA)
+def test_rodar_ciclo_projeta_atualizar_quando_ja_tem_evento_projetado(mock_busca, mock_coords):
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+    db.atualizar_score(conn, planta_id, 70)
+    db.marcar_evento_projetado(conn, planta_id, "previsao-abc")
+
+    resumo = motor.rodar_ciclo(conn, hoje=datetime.date(2026, 8, 18))
+
+    assert len(resumo["projecoes"]) == 1
+    projecao = resumo["projecoes"][0]
+    assert projecao["acao"] == "atualizar"
+    assert projecao["evento_projetado_id"] == "previsao-abc"
+    assert projecao["data_prevista"] == "2026-08-20"
+
+
+@patch("motor.config.resolver_coordenadas", return_value=(-23.5, -46.6))
+@patch("motor.clima.buscar_dados_climaticos", return_value=RESPOSTA_CHUVA_FUTURA)
+def test_rodar_ciclo_projeta_cancelar_quando_chuva_muda_previsao(mock_busca, mock_coords):
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+    db.atualizar_score(conn, planta_id, 82.5)  # some 12.5 hoje = 95, mas chuva futura segura
+    db.marcar_evento_projetado(conn, planta_id, "previsao-abc")
+
+    resumo = motor.rodar_ciclo(conn, hoje=datetime.date(2026, 8, 18))
+
+    assert resumo["novos_avisos"] == []
+    assert len(resumo["projecoes"]) == 1
+    projecao = resumo["projecoes"][0]
+    assert projecao["acao"] == "cancelar"
+    assert projecao["evento_projetado_id"] == "previsao-abc"
+    assert "data_prevista" not in projecao
+
+
+@patch("motor.config.resolver_coordenadas", return_value=(-23.5, -46.6))
+@patch("motor.clima.buscar_dados_climaticos", return_value=RESPOSTA_SECA)
+def test_rodar_ciclo_sem_projecao_quando_nao_vai_cruzar_e_nunca_teve_evento(mock_busca, mock_coords):
+    conn = _conexao_teste()
+    db.inserir_planta(conn, PLANTA_EXEMPLO)  # score 0, longe de cruzar 100 em 2 dias
+
+    resumo = motor.rodar_ciclo(conn, hoje=datetime.date(2026, 8, 18))
+
+    assert resumo["projecoes"] == []
