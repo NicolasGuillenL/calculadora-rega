@@ -19,6 +19,11 @@ def regar(conn, nome_planta, hoje=None):
 
     db.registrar_rega(conn, planta["id"], hoje.isoformat(), score_anterior)
     db.atualizar_score(conn, planta["id"], 0)
+
+    for evento_id in (evento_confirmado_anterior, evento_projetado_anterior):
+        if evento_id is not None:
+            db.enfileirar_evento_pendente_limpeza(conn, evento_id)
+
     db.limpar_evento_calendario(conn, planta["id"])
     db.limpar_evento_projetado(conn, planta["id"])
 
@@ -49,8 +54,7 @@ if __name__ == "__main__":
     if eventos_pendentes:
         lista = ", ".join(f'"{e}"' for e in eventos_pendentes)
         print(
-            f"\nATENÇÃO: o(s) evento(s) {lista} ainda existe(m) no "
-            "Google Calendar. Este script não apaga eventos (isso acontece na "
-            "camada do agente, não aqui) — peça pro Claude apagar esse(s) "
-            "evento(s) manualmente."
+            f"\nO(s) evento(s) {lista} ainda existe(m) no Google Calendar, mas já "
+            "foram enfileirados para limpeza automática: o próximo ciclo diário "
+            "vai apagá-los do Calendar (pode levar até 1 dia)."
         )
