@@ -65,6 +65,12 @@ CREATE TABLE IF NOT EXISTS historico_scores (
     precipitacao_mm REAL,
     UNIQUE(planta_id, data)
 );
+
+CREATE TABLE IF NOT EXISTS eventos_pendentes_limpeza (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    evento_id TEXT NOT NULL,
+    criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 # Mantém em sincronia (conceitualmente) com as chaves de clima.FATOR_RETENCAO
@@ -226,4 +232,26 @@ def registrar_rega(conn, planta_id, data, score_no_momento):
 def atualizar_exposicao(conn, planta_id, nova_exposicao):
     cur = conn.cursor()
     cur.execute("UPDATE plantas SET exposicao = ? WHERE id = ?", (nova_exposicao, planta_id))
+    conn.commit()
+
+
+def enfileirar_evento_pendente_limpeza(conn, evento_id):
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO eventos_pendentes_limpeza (evento_id) VALUES (?)",
+        (evento_id,),
+    )
+    conn.commit()
+
+
+def listar_eventos_pendentes_limpeza(conn):
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM eventos_pendentes_limpeza")
+    linhas = cur.fetchall()
+    return [_linha_para_dict(cur, linha) for linha in linhas]
+
+
+def remover_evento_pendente_limpeza(conn, pendente_id):
+    cur = conn.cursor()
+    cur.execute("DELETE FROM eventos_pendentes_limpeza WHERE id = ?", (pendente_id,))
     conn.commit()

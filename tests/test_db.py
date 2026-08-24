@@ -231,3 +231,38 @@ def test_atualizar_retencao_substrato_rejeita_valor_invalido():
 
     # o valor original não deve ter sido sobrescrito.
     assert db.obter_planta(conn, "Jiboia")["retencao_substrato"] == "media"
+
+
+def test_enfileirar_e_listar_evento_pendente_limpeza():
+    conn = _conexao_teste()
+    db.enfileirar_evento_pendente_limpeza(conn, "evento-abc")
+
+    pendentes = db.listar_eventos_pendentes_limpeza(conn)
+
+    assert len(pendentes) == 1
+    assert pendentes[0]["evento_id"] == "evento-abc"
+
+
+def test_listar_eventos_pendentes_limpeza_vazio_quando_nao_ha_fila():
+    conn = _conexao_teste()
+    assert db.listar_eventos_pendentes_limpeza(conn) == []
+
+
+def test_remover_evento_pendente_limpeza():
+    conn = _conexao_teste()
+    db.enfileirar_evento_pendente_limpeza(conn, "evento-abc")
+    pendente_id = db.listar_eventos_pendentes_limpeza(conn)[0]["id"]
+
+    db.remover_evento_pendente_limpeza(conn, pendente_id)
+
+    assert db.listar_eventos_pendentes_limpeza(conn) == []
+
+
+def test_enfileirar_permite_varios_eventos_pendentes():
+    conn = _conexao_teste()
+    db.enfileirar_evento_pendente_limpeza(conn, "evento-1")
+    db.enfileirar_evento_pendente_limpeza(conn, "evento-2")
+
+    pendentes = {p["evento_id"] for p in db.listar_eventos_pendentes_limpeza(conn)}
+
+    assert pendentes == {"evento-1", "evento-2"}
