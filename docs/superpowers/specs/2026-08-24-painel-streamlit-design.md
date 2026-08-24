@@ -93,19 +93,42 @@ na hora — isso só acontece hoje através do assistente (via chat, com acesso
 às ferramentas de Calendar) ou da tarefa agendada diária. Nero confirmou que
 está OK com até 1 dia de atraso nesse caso específico.
 
-Para isso não virar um evento "esquecido" para sempre, o **ciclo diário
-existente** (prompt da tarefa agendada) ganha um passo novo: antes de
-processar `novos_avisos`/`ainda_atrasadas`/`projecoes`, verificar se alguma
-planta tem `evento_calendario_id` ou `evento_projetado_id` não-nulo **e**
-`ultima_rega` mais recente que a criação desse evento (ou seja: foi regada
-depois que o evento foi criado, mas o evento nunca foi limpo — sinal de que
-foi regada pelo painel). Para cada uma encontrada: apaga o evento no
-Calendar e limpa a referência no banco (`db.limpar_evento_calendario` /
-`db.limpar_evento_projetado`).
+Para isso não virar um evento "esquecido" para sempre, `regar()` (chamado
+tanto pelo painel quanto pelo CLI/chat) passa a **enfileirar** os ids de
+evento que remove numa tabela nova, `eventos_pendentes_limpeza`
+(`db.enfileirar_evento_pendente_limpeza` / `db.listar_eventos_pendentes_limpeza`
+/ `db.remover_evento_pendente_limpeza`), antes de limpar a referência na
+planta. O **ciclo diário existente** (prompt da tarefa agendada) ganha um
+passo novo: drenar essa fila — para cada item em
+`db.listar_eventos_pendentes_limpeza`, apagar o evento correspondente no
+Google Calendar e então remover o item da fila com
+`db.remover_evento_pendente_limpeza`.
 
-Essa checagem é lógica pura sobre o banco (comparação de datas), então tem
-teste automatizado — é a única parte desta mudança que ganha teste
-automatizado, conforme "Fora de escopo" acima.
+Essa é a versão corrigida do mecanismo; ver a nota abaixo sobre o que foi
+rejeitado.
+
+### Correção importante em relação à primeira versão desta spec
+
+A primeira versão desta seção propunha detectar "regada fora do fluxo"
+comparando `ultima_rega` da planta com a data de criação do evento
+(`evento_calendario_id`/`evento_projetado_id` não-nulo **e** `ultima_rega`
+mais recente que a criação do evento). Essa ideia foi **abandonada**: não
+há coluna com a data de criação do evento para comparar, e a checagem não
+distinguia "regada pelo painel, evento ainda não limpo" de "regada há
+muito tempo, e por algum motivo o evento nunca foi limpo por outro
+caminho" — cenários que pedem tratamentos diferentes. A fila
+`eventos_pendentes_limpeza` resolve isso de forma explícita: `regar()`
+enfileira exatamente os eventos que removeu, no momento em que os remove,
+sem precisar inferir nada a partir de timestamps depois. **O mecanismo a
+implementar no ciclo diário é a fila, não a comparação de `ultima_rega`.**
+
+A fila em si (inserir/listar/remover) é lógica pura sobre o banco, então
+tem teste automatizado (`tests/test_db.py`, `tests/test_regar.py`) — é a
+parte desta mudança que ganha teste automatizado, conforme "Fora de
+escopo" acima. O passo de drenagem no ciclo diário (que efetivamente
+apaga o evento no Google Calendar) roda na camada do agente, como o resto
+da integração com o Calendar — ver "## Automação diária" no `README.md`
+raiz.
 
 ## Tratamento de erros
 
@@ -119,11 +142,10 @@ automatizado, conforme "Fora de escopo" acima.
 
 ## Testes
 
-- Teste automatizado (`pytest`) só para a nova checagem de "planta regada
-  fora do fluxo" descrita acima — dado um banco com uma planta com
-  `evento_calendario_id` setado e `ultima_rega` posterior à criação do
-  evento, a função de checagem deve identificá-la como pendente de limpeza;
-  dado o caso normal (sem rega recente), não deve identificá-la.
+- Teste automatizado (`pytest`) para a fila `eventos_pendentes_limpeza`
+  descrita acima: enfileirar/listar/remover (`tests/test_db.py`) e o
+  comportamento de `regar()` de enfileirar os eventos que remove
+  (`tests/test_regar.py`).
 - O restante do painel (autenticação, listagem, botão de regar) é validado
   manualmente por Nero rodando `streamlit run painel/app.py` localmente
   antes do deploy.

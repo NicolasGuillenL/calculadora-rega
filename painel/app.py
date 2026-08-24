@@ -1,4 +1,5 @@
 """Painel web do Calculadora de Rega de Planta — Streamlit."""
+import logging
 import os
 import sys
 
@@ -17,14 +18,46 @@ st.set_page_config(page_title="Painel de Rega", page_icon="🌿")
 
 CORES = {"vermelho": "🔴", "amarelo": "🟡", "verde": "🟢"}
 
-# Streamlit Community Cloud entrega credenciais via st.secrets, não via
-# variáveis de ambiente — db.conectar() só sabe ler de os.environ (via
-# python-dotenv), então preenchemos o ambiente a partir de st.secrets aqui.
-# setdefault: se já existir um .env local com essas variáveis (rodando o
-# painel na sua própria máquina), ele continua valendo.
+# Localmente, as credenciais vêm do `.env` (via python-dotenv, que
+# db.conectar() já sabe ler). No Streamlit Community Cloud não há `.env` —
+# as credenciais ficam em st.secrets, então usamos elas como fallback
+# quando a variável de ambiente ainda não está setada. `.env` local tem
+# prioridade quando os dois existem.
+#
+# st.secrets levanta StreamlitSecretNotFoundError se não existir NENHUM
+# arquivo de secrets (comum ao rodar só com `.env`, sem
+# `.streamlit/secrets.toml`) — por isso o acesso é protegido por
+# try/except em vez de deixar isso derrubar o app inteiro.
+def _obter_credencial(chave):
+    """Lê uma credencial do ambiente (.env local) ou, se ausente, dos
+    secrets do Streamlit (usado no deploy, onde não há .env)."""
+    if chave in os.environ:
+        return os.environ[chave]
+    try:
+        return st.secrets.get(chave)
+    except Exception:
+        return None
+
+
 for _chave in ("TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"):
-    if _chave in st.secrets:
-        os.environ.setdefault(_chave, st.secrets[_chave])
+    valor = _obter_credencial(_chave)
+    if valor:
+        os.environ[_chave] = valor
+
+
+def _senha_configurada():
+    """PAINEL_SENHA só existe nos secrets do Streamlit (nunca no `.env`,
+    já que o painel é a única coisa que usa essa senha). Protegido contra
+    a ausência total de arquivo de secrets, igual `_obter_credencial`."""
+    try:
+        return st.secrets.get("PAINEL_SENHA")
+    except Exception:
+        return None
+
+
+@st.cache_resource
+def _conexao():
+    return db.conectar()
 
 
 def _autenticado():
@@ -33,9 +66,15 @@ def _autenticado():
 
 def _tela_login():
     st.title("🌿 Painel de Rega")
+
+    senha_configurada = _senha_configurada()
+    if not senha_configurada:
+        st.error("PAINEL_SENHA não está configurada. Veja painel/README.md.")
+        return
+
     senha = st.text_input("Senha", type="password")
     if st.button("Entrar"):
-        if senha == st.secrets.get("PAINEL_SENHA"):
+        if senha == senha_configurada:
             st.session_state["autenticado"] = True
             st.rerun()
         else:
@@ -46,9 +85,10 @@ def _tela_principal():
     st.title("🌿 Painel de Rega")
 
     try:
-        conn = db.conectar()
+        conn = _conexao()
         plantas = db.listar_plantas(conn)
     except Exception:
+        logging.exception("Falha ao acessar o banco de dados")
         st.error("Não consegui acessar os dados agora. Tenta de novo em instantes.")
         return
 
@@ -64,6 +104,7 @@ def _tela_principal():
                         regar.regar(conn, planta["nome"])
                         st.rerun()
                     except Exception:
+                        logging.exception(f"Falha ao registrar rega de {planta['nome']}")
                         st.error(f"Não consegui registrar a rega de {planta['nome']}. Tenta de novo.")
 
 

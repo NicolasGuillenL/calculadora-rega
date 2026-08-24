@@ -42,10 +42,15 @@ python3 regar.py "Nome da planta"
 
 Isso zera o score da planta e limpa o vínculo com o evento do Google
 Calendar no banco. **Atenção:** o script não apaga o evento do Calendar
-em si — só remove a referência no banco. Se havia um evento de lembrete
-criado, ele continua existindo lá e precisa ser apagado separadamente
-(o jeito mais fácil é pedir pro Claude apagar o evento). O próprio
-`regar.py` avisa no terminal quando isso acontece.
+na hora — ele fica enfileirado numa tabela de limpeza pendente
+(`eventos_pendentes_limpeza`) e é o **ciclo diário automatizado**
+(`main.py`, rodando como tarefa agendada) quem drena essa fila e apaga
+os eventos de fato do Calendar, o que pode levar até 1 dia. O próprio
+`regar.py` avisa no terminal quando um evento foi enfileirado dessa
+forma.
+
+Existe também um painel web (`painel/`) que chama esse mesmo `regar()`
+com um clique — veja `painel/README.md` para rodar ou publicar.
 
 ## Automação diária (tarefa agendada)
 

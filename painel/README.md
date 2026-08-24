@@ -7,8 +7,9 @@ Painel web para ver o status das plantas e registrar rega com um clique.
 1. Na raiz do repositório, copie `.streamlit/secrets.toml.example` para
    `.streamlit/secrets.toml` e preencha com as credenciais reais do Turso e
    a senha que você quer usar no painel.
-2. Instale as dependências: `pip install -r requirements.txt` (use
-   `--break-system-packages` se necessário, ou um virtualenv).
+2. Na raiz do repositório, instale as dependências (o core do projeto mais
+   as do painel): `pip install -r requirements.txt -r painel/requirements.txt`
+   (use `--break-system-packages` se necessário, ou um virtualenv).
 3. Rode: `streamlit run painel/app.py`
 4. Abra o link que aparecer no terminal (geralmente http://localhost:8501).
 
