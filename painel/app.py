@@ -10,6 +10,7 @@ import streamlit as st
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import db
+import regar
 from painel import logica
 
 st.set_page_config(page_title="Painel de Rega", page_icon="🌿")
@@ -53,7 +54,17 @@ def _tela_principal():
 
     for planta in sorted(plantas, key=lambda p: p["nome"]):
         cor, texto = logica.calcular_status(planta)
-        st.write(f"{CORES[cor]} **{planta['nome']}** — score {planta['score']:.1f} — {texto}")
+        coluna_info, coluna_botao = st.columns([4, 1])
+        with coluna_info:
+            st.write(f"{CORES[cor]} **{planta['nome']}** — score {planta['score']:.1f} — {texto}")
+        with coluna_botao:
+            if cor == "vermelho":
+                if st.button("Reguei", key=f"regar_{planta['id']}"):
+                    try:
+                        regar.regar(conn, planta["nome"])
+                        st.rerun()
+                    except Exception:
+                        st.error(f"Não consegui registrar a rega de {planta['nome']}. Tenta de novo.")
 
 
 def main():
