@@ -1,5 +1,7 @@
 import sqlite3
 
+import pytest
+
 import db
 
 PLANTA_EXEMPLO = {
@@ -14,6 +16,7 @@ PLANTA_EXEMPLO = {
     "mudas": "Estacas em água",
     "epoca_mudas": "Primavera",
     "exposicao": 5,
+    "retencao_substrato": "media",
     "cidade": "Sao Paulo, SP",
 }
 
@@ -102,40 +105,32 @@ def test_registrar_rega():
     assert cur.fetchall()[0][0] == 130
 
 
-def test_marcar_e_limpar_evento_projetado():
+def test_ja_processado_hoje_false_quando_nao_ha_historico():
     conn = _conexao_teste()
     planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
 
-    db.marcar_evento_projetado(conn, planta_id, "previsao-123")
-    assert db.obter_planta(conn, "Jiboia")["evento_projetado_id"] == "previsao-123"
-
-    db.limpar_evento_projetado(conn, planta_id)
-    assert db.obter_planta(conn, "Jiboia")["evento_projetado_id"] is None
+    assert db.ja_processado_hoje(conn, planta_id, "2026-08-18") is False
 
 
-def test_promover_evento_projetado_vira_evento_calendario():
+def test_ja_processado_hoje_true_apos_registrar_historico():
     conn = _conexao_teste()
     planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
-    db.marcar_evento_projetado(conn, planta_id, "previsao-123")
+    db.registrar_historico_score(
+        conn, planta_id, "2026-08-18",
+        incremento_base=10, incremento_clima=3.5,
+        score_final=13.5, et0=4.2, precipitacao_mm=0,
+    )
 
-    db.promover_evento_projetado(conn, planta_id, "previsao-123")
-
-    planta = db.obter_planta(conn, "Jiboia")
-    assert planta["evento_calendario_id"] == "previsao-123"
-    assert planta["evento_projetado_id"] is None
+    assert db.ja_processado_hoje(conn, planta_id, "2026-08-18") is True
+    assert db.ja_processado_hoje(conn, planta_id, "2026-08-19") is False
 
 
-def test_promover_evento_projetado_ignora_id_que_nao_bate():
-    conn = _conexao_teste()
-    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
-    db.marcar_evento_projetado(conn, planta_id, "previsao-123")
+def test_conectar_sem_env_vars_gera_erro_claro(monkeypatch):
+    monkeypatch.delenv("TURSO_DATABASE_URL", raising=False)
+    monkeypatch.delenv("TURSO_AUTH_TOKEN", raising=False)
 
-    # id errado (ex: previsão já tinha sido substituída) não deve promover
-    db.promover_evento_projetado(conn, planta_id, "previsao-outra")
-
-    planta = db.obter_planta(conn, "Jiboia")
-    assert planta["evento_calendario_id"] is None
-    assert planta["evento_projetado_id"] == "previsao-123"
+    with pytest.raises(RuntimeError, match="TURSO_DATABASE_URL"):
+        db.conectar()
 
 
 def test_atualizar_exposicao():
@@ -145,3 +140,129 @@ def test_atualizar_exposicao():
     db.atualizar_exposicao(conn, planta_id, 10)
 
     assert db.obter_planta(conn, "Jiboia")["exposicao"] == 10
+
+
+def test_migrar_schema_v2_adiciona_colunas_novas():
+    conn = sqlite3.connect(":memory:")
+    # schema "antigo" (pré-v2), sem retencao_substrato nem evento_projetado_id
+    conn.execute("""
+        CREATE TABLE plantas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL UNIQUE,
+            temperatura_ideal_c REAL,
+            umidade_ideal_pct REAL,
+            florescimento TEXT,
+            crescimento TEXT,
+            crescimento2 TEXT,
+            poda TEXT,
+            replantio TEXT,
+            mudas TEXT,
+            epoca_mudas TEXT,
+            exposicao INTEGER NOT NULL DEFAULT 5,
+            cidade TEXT NOT NULL,
+            score REAL NOT NULL DEFAULT 0,
+            ultima_rega TEXT,
+            evento_calendario_id TEXT,
+            criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("INSERT INTO plantas (nome, cidade) VALUES (?, ?)", ("Jiboia", "Sao Paulo, SP"))
+    conn.commit()
+
+    db.migrar_schema_v2(conn)
+    db.migrar_schema_v2(conn)  # idempotente: rodar de novo não pode quebrar
+
+    planta = db.obter_planta(conn, "Jiboia")
+    assert planta["retencao_substrato"] == "media"
+    assert planta["evento_projetado_id"] is None
+
+
+def test_marcar_e_limpar_evento_projetado():
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+
+    db.marcar_evento_projetado(conn, planta_id, "projetado-123")
+    assert db.obter_planta(conn, "Jiboia")["evento_projetado_id"] == "projetado-123"
+
+    db.limpar_evento_projetado(conn, planta_id)
+    assert db.obter_planta(conn, "Jiboia")["evento_projetado_id"] is None
+
+
+def test_promover_evento_projetado_vira_confirmado_e_limpa_projetado():
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+    db.marcar_evento_projetado(conn, planta_id, "projetado-123")
+
+    db.promover_evento_projetado(conn, planta_id, "projetado-123")
+
+    planta = db.obter_planta(conn, "Jiboia")
+    assert planta["evento_calendario_id"] == "projetado-123"
+    assert planta["evento_projetado_id"] is None
+
+
+def test_atualizar_retencao_substrato():
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+
+    db.atualizar_retencao_substrato(conn, planta_id, "alta")
+
+    assert db.obter_planta(conn, "Jiboia")["retencao_substrato"] == "alta"
+
+
+def test_atualizar_retencao_substrato_aceita_todos_os_valores_validos():
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+
+    for valor in ("alta", "media", "baixa"):
+        db.atualizar_retencao_substrato(conn, planta_id, valor)
+        assert db.obter_planta(conn, "Jiboia")["retencao_substrato"] == valor
+
+
+def test_atualizar_retencao_substrato_rejeita_valor_invalido():
+    # Regressão do achado 2 da revisão final: um valor inválido (ex.: erro
+    # de digitação/capitalização) não pode ser gravado — se chegasse até o
+    # banco, derrubaria o ciclo diário inteiro (KeyError em
+    # clima.FATOR_RETENCAO) sem isolamento por planta.
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+
+    with pytest.raises(ValueError):
+        db.atualizar_retencao_substrato(conn, planta_id, "Alta")
+
+    # o valor original não deve ter sido sobrescrito.
+    assert db.obter_planta(conn, "Jiboia")["retencao_substrato"] == "media"
+
+
+def test_enfileirar_e_listar_evento_pendente_limpeza():
+    conn = _conexao_teste()
+    db.enfileirar_evento_pendente_limpeza(conn, "evento-abc")
+
+    pendentes = db.listar_eventos_pendentes_limpeza(conn)
+
+    assert len(pendentes) == 1
+    assert pendentes[0]["evento_id"] == "evento-abc"
+
+
+def test_listar_eventos_pendentes_limpeza_vazio_quando_nao_ha_fila():
+    conn = _conexao_teste()
+    assert db.listar_eventos_pendentes_limpeza(conn) == []
+
+
+def test_remover_evento_pendente_limpeza():
+    conn = _conexao_teste()
+    db.enfileirar_evento_pendente_limpeza(conn, "evento-abc")
+    pendente_id = db.listar_eventos_pendentes_limpeza(conn)[0]["id"]
+
+    db.remover_evento_pendente_limpeza(conn, pendente_id)
+
+    assert db.listar_eventos_pendentes_limpeza(conn) == []
+
+
+def test_enfileirar_permite_varios_eventos_pendentes():
+    conn = _conexao_teste()
+    db.enfileirar_evento_pendente_limpeza(conn, "evento-1")
+    db.enfileirar_evento_pendente_limpeza(conn, "evento-2")
+
+    pendentes = {p["evento_id"] for p in db.listar_eventos_pendentes_limpeza(conn)}
+
+    assert pendentes == {"evento-1", "evento-2"}

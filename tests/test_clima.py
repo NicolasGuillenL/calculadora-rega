@@ -30,6 +30,31 @@ def test_clima_do_dia_encontra_a_data_certa():
     assert dia["nebulosidade_pct"] == 10.0
 
 
+def test_clima_do_dia_trata_valores_nulos_da_api_sem_quebrar():
+    resposta_com_nulos = {
+        "daily": {
+            "time": ["2026-08-18"],
+            "et0_fao_evapotranspiration": [None],
+            "precipitation_sum": [None],
+            "precipitation_probability_max": [None],
+            "windspeed_10m_max": [None],
+            "uv_index_max": [None],
+            "relative_humidity_2m_mean": [None],
+            "cloudcover_mean": [None],
+        }
+    }
+
+    dia = clima.clima_do_dia(resposta_com_nulos, "2026-08-18")
+
+    assert dia["et0"] == 0.0
+    assert dia["precipitacao_mm"] == 0.0
+    assert dia["probabilidade_chuva_pct"] == 0
+    assert dia["windspeed_10m_max"] == 0.0
+    assert dia["uv_index_max"] == 0.0
+    assert dia["umidade_relativa_pct"] == 0.0
+    assert dia["nebulosidade_pct"] == 0.0
+
+
 @patch("clima.requests.get")
 def test_buscar_dados_climaticos_faz_request_correto(mock_get):
     mock_resposta = Mock()
@@ -148,3 +173,61 @@ def test_nao_deve_adiar_aviso_quando_score_baixo():
 def test_nao_deve_adiar_aviso_quando_chuva_improvavel():
     clima_hoje = {"probabilidade_chuva_pct": 10}
     assert clima.deve_adiar_aviso(95, clima_hoje) is False
+
+
+def test_incremento_clima_retencao_alta_amortece_secagem():
+    planta_media = {"umidade_ideal_pct": 70, "exposicao": 10, "retencao_substrato": "media"}
+    planta_alta = {"umidade_ideal_pct": 70, "exposicao": 10, "retencao_substrato": "alta"}
+
+    incremento_media = clima.calcular_incremento_clima(planta_media, _clima_seco_e_quente())
+    incremento_alta = clima.calcular_incremento_clima(planta_alta, _clima_seco_e_quente())
+
+    assert incremento_alta < incremento_media
+
+
+def test_incremento_clima_retencao_baixa_acelera_secagem():
+    planta_media = {"umidade_ideal_pct": 70, "exposicao": 10, "retencao_substrato": "media"}
+    planta_baixa = {"umidade_ideal_pct": 70, "exposicao": 10, "retencao_substrato": "baixa"}
+
+    incremento_media = clima.calcular_incremento_clima(planta_media, _clima_seco_e_quente())
+    incremento_baixa = clima.calcular_incremento_clima(planta_baixa, _clima_seco_e_quente())
+
+    assert incremento_baixa > incremento_media
+
+
+def test_incremento_clima_sem_retencao_substrato_usa_media_por_padrao():
+    planta_sem_campo = {"umidade_ideal_pct": 70, "exposicao": 10}
+    planta_media_explicita = {"umidade_ideal_pct": 70, "exposicao": 10, "retencao_substrato": "media"}
+
+    incremento_sem_campo = clima.calcular_incremento_clima(planta_sem_campo, _clima_seco_e_quente())
+    incremento_media_explicita = clima.calcular_incremento_clima(planta_media_explicita, _clima_seco_e_quente())
+
+    assert incremento_sem_campo == incremento_media_explicita
+
+
+def test_incremento_clima_com_retencao_substrato_invalida_cai_para_media():
+    # Defesa em profundidade (achado 2 da revisão final): se um valor
+    # inválido chegar de algum outro jeito até aqui (ex.: escrito
+    # diretamente via SQL, ou por um caminho de código futuro que não passe
+    # por db.atualizar_retencao_substrato), o cálculo não pode explodir com
+    # KeyError — deve cair pro fator neutro (media = 1.0).
+    planta_invalida = {"umidade_ideal_pct": 70, "exposicao": 10, "retencao_substrato": "invalido"}
+    planta_media_explicita = {"umidade_ideal_pct": 70, "exposicao": 10, "retencao_substrato": "media"}
+
+    incremento_invalido = clima.calcular_incremento_clima(planta_invalida, _clima_seco_e_quente())
+    incremento_media_explicita = clima.calcular_incremento_clima(planta_media_explicita, _clima_seco_e_quente())
+
+    assert incremento_invalido == incremento_media_explicita
+
+
+@patch("clima.requests.get")
+def test_buscar_dados_climaticos_pede_3_dias_futuros_por_padrao(mock_get):
+    mock_resposta = Mock()
+    mock_resposta.json.return_value = RESPOSTA_API_EXEMPLO
+    mock_resposta.raise_for_status.return_value = None
+    mock_get.return_value = mock_resposta
+
+    clima.buscar_dados_climaticos(-23.5, -46.6)
+
+    args, kwargs = mock_get.call_args
+    assert kwargs["params"]["forecast_days"] == 3

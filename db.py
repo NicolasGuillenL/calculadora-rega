@@ -9,8 +9,17 @@ load_dotenv()
 
 def conectar():
     """Conecta no banco Turso configurado nas variáveis de ambiente."""
-    url = os.environ["TURSO_DATABASE_URL"]
-    token = os.environ["TURSO_AUTH_TOKEN"]
+    try:
+        url = os.environ["TURSO_DATABASE_URL"]
+        token = os.environ["TURSO_AUTH_TOKEN"]
+    except KeyError as erro:
+        variavel = erro.args[0]
+        raise RuntimeError(
+            f"Variável de ambiente '{variavel}' não está definida. "
+            "Configure TURSO_DATABASE_URL e TURSO_AUTH_TOKEN (por exemplo, "
+            "num arquivo .env ou nas variáveis exportadas pela tarefa "
+            "agendada) antes de conectar no banco."
+        ) from erro
     return libsql.connect(database=url, auth_token=token)
 
 
@@ -32,6 +41,7 @@ CREATE TABLE IF NOT EXISTS plantas (
     score REAL NOT NULL DEFAULT 0,
     ultima_rega TEXT,
     evento_calendario_id TEXT,
+    retencao_substrato TEXT NOT NULL DEFAULT 'media',
     evento_projetado_id TEXT,
     criado_em TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -55,12 +65,23 @@ CREATE TABLE IF NOT EXISTS historico_scores (
     precipitacao_mm REAL,
     UNIQUE(planta_id, data)
 );
+
+CREATE TABLE IF NOT EXISTS eventos_pendentes_limpeza (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    evento_id TEXT NOT NULL,
+    criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
+
+# Mantém em sincronia (conceitualmente) com as chaves de clima.FATOR_RETENCAO
+# — não importamos `clima` aqui pra não criar uma dependência às avessas
+# (clima.py não precisa saber nada sobre db.py).
+VALORES_RETENCAO_VALIDOS = {"alta", "media", "baixa"}
 
 CAMPOS_PLANTA = [
     "nome", "temperatura_ideal_c", "umidade_ideal_pct", "florescimento",
     "crescimento", "crescimento2", "poda", "replantio", "mudas",
-    "epoca_mudas", "exposicao", "cidade",
+    "epoca_mudas", "exposicao", "cidade", "retencao_substrato",
 ]
 
 
@@ -70,18 +91,27 @@ def criar_schema(conn):
         instrucao = instrucao.strip()
         if instrucao:
             cur.execute(instrucao)
-    # Bancos criados antes deste campo existir não ganham a coluna nova só
-    # por causa do "CREATE TABLE IF NOT EXISTS" acima (ele não altera tabela
-    # já existente) — então garantimos aqui, sem apagar nada.
-    _garantir_coluna(cur, "plantas", "evento_projetado_id", "TEXT")
     conn.commit()
+    migrar_schema_v2(conn)
 
 
-def _garantir_coluna(cur, tabela, coluna, tipo_sql):
-    cur.execute(f"PRAGMA table_info({tabela})")
-    colunas_existentes = {linha[1] for linha in cur.fetchall()}
-    if coluna not in colunas_existentes:
-        cur.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo_sql}")
+def migrar_schema_v2(conn):
+    """Adiciona as colunas da v2 (retencao_substrato, evento_projetado_id) a
+    um banco criado antes delas existirem. Idempotente: rodar mais de uma
+    vez não quebra, mesmo que as colunas já existam (CREATE TABLE já as
+    inclui em bancos novos, então isso vira um no-op nesse caso)."""
+    cur = conn.cursor()
+    alteracoes = [
+        "ALTER TABLE plantas ADD COLUMN retencao_substrato TEXT NOT NULL DEFAULT 'media'",
+        "ALTER TABLE plantas ADD COLUMN evento_projetado_id TEXT",
+    ]
+    for instrucao in alteracoes:
+        try:
+            cur.execute(instrucao)
+        except Exception as erro:
+            if "duplicate column" not in str(erro).lower():
+                raise
+    conn.commit()
 
 
 def _linha_para_dict(cursor, linha):
@@ -132,8 +162,6 @@ def limpar_evento_calendario(conn, planta_id):
 
 
 def marcar_evento_projetado(conn, planta_id, evento_id):
-    """Guarda o id do evento de 'previsão' (🌦️) criado no Calendar pra essa
-    planta — usado antes de ela cruzar o score de rega de verdade."""
     cur = conn.cursor()
     cur.execute("UPDATE plantas SET evento_projetado_id = ? WHERE id = ?", (evento_id, planta_id))
     conn.commit()
@@ -143,20 +171,25 @@ def limpar_evento_projetado(conn, planta_id):
     marcar_evento_projetado(conn, planta_id, None)
 
 
-def promover_evento_projetado(conn, planta_id, evento_projetado_id):
-    """Confirma que a previsão virou aviso de verdade: o evento que estava
-    marcado como 'previsão' passa a ser o evento_calendario_id oficial.
-
-    Chame isso DEPOIS de já ter atualizado o evento no Google Calendar
-    (título, descrição e data de hoje) — esta função só atualiza o banco.
-    """
+def promover_evento_projetado(conn, planta_id, evento_id):
+    """Confirma um evento que estava projetado: ele vira o evento oficial
+    (evento_calendario_id) e o campo de projeção é limpo — mesmo evento no
+    Calendar, sem criar um novo nem cancelar o antigo."""
     cur = conn.cursor()
     cur.execute(
-        """UPDATE plantas
-           SET evento_calendario_id = ?, evento_projetado_id = NULL
-           WHERE id = ? AND evento_projetado_id = ?""",
-        (evento_projetado_id, planta_id, evento_projetado_id),
+        "UPDATE plantas SET evento_calendario_id = ?, evento_projetado_id = NULL WHERE id = ?",
+        (evento_id, planta_id),
     )
+    conn.commit()
+
+
+def atualizar_retencao_substrato(conn, planta_id, novo_valor):
+    if novo_valor not in VALORES_RETENCAO_VALIDOS:
+        raise ValueError(
+            f"retencao_substrato inválido: '{novo_valor}'. Use um de: alta, media, baixa."
+        )
+    cur = conn.cursor()
+    cur.execute("UPDATE plantas SET retencao_substrato = ? WHERE id = ?", (novo_valor, planta_id))
     conn.commit()
 
 
@@ -177,6 +210,15 @@ def registrar_historico_score(conn, planta_id, data, incremento_base, incremento
     conn.commit()
 
 
+def ja_processado_hoje(conn, planta_id, data):
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT 1 FROM historico_scores WHERE planta_id = ? AND data = ?",
+        (planta_id, data),
+    )
+    return cur.fetchall() != []
+
+
 def registrar_rega(conn, planta_id, data, score_no_momento):
     cur = conn.cursor()
     cur.execute(
@@ -190,4 +232,26 @@ def registrar_rega(conn, planta_id, data, score_no_momento):
 def atualizar_exposicao(conn, planta_id, nova_exposicao):
     cur = conn.cursor()
     cur.execute("UPDATE plantas SET exposicao = ? WHERE id = ?", (nova_exposicao, planta_id))
+    conn.commit()
+
+
+def enfileirar_evento_pendente_limpeza(conn, evento_id):
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO eventos_pendentes_limpeza (evento_id) VALUES (?)",
+        (evento_id,),
+    )
+    conn.commit()
+
+
+def listar_eventos_pendentes_limpeza(conn):
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM eventos_pendentes_limpeza")
+    linhas = cur.fetchall()
+    return [_linha_para_dict(cur, linha) for linha in linhas]
+
+
+def remover_evento_pendente_limpeza(conn, pendente_id):
+    cur = conn.cursor()
+    cur.execute("DELETE FROM eventos_pendentes_limpeza WHERE id = ?", (pendente_id,))
     conn.commit()

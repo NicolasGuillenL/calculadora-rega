@@ -1,5 +1,8 @@
 import datetime
+import runpy
 import sqlite3
+import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -18,6 +21,7 @@ PLANTA_EXEMPLO = {
     "mudas": None,
     "epoca_mudas": None,
     "exposicao": 5,
+    "retencao_substrato": "media",
     "cidade": "Sao Paulo, SP",
 }
 
@@ -44,6 +48,7 @@ def test_regar_zera_score_e_registra_historico():
         "nome": "Jiboia",
         "score_anterior": 135,
         "evento_calendario_id_removido": "evento-abc",
+        "evento_projetado_id_removido": None,
     }
 
     cur = conn.cursor()
@@ -55,3 +60,70 @@ def test_regar_planta_inexistente_gera_erro():
     conn = _conexao_teste()
     with pytest.raises(ValueError):
         regar.regar(conn, "Não existe")
+
+
+def test_regar_limpa_evento_confirmado_e_projetado_ao_mesmo_tempo():
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+    db.atualizar_score(conn, planta_id, 135)
+    db.marcar_evento_calendario(conn, planta_id, "evento-confirmado")
+    db.marcar_evento_projetado(conn, planta_id, "evento-projetado")
+
+    resultado = regar.regar(conn, "Jiboia", hoje=datetime.date(2026, 8, 18))
+
+    planta = db.obter_planta(conn, "Jiboia")
+    assert planta["evento_calendario_id"] is None
+    assert planta["evento_projetado_id"] is None
+    assert resultado["evento_calendario_id_removido"] == "evento-confirmado"
+    assert resultado["evento_projetado_id_removido"] == "evento-projetado"
+
+
+def test_cli_avisa_sobre_os_dois_eventos_pendentes(capsys):
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+    db.atualizar_score(conn, planta_id, 135)
+    db.marcar_evento_calendario(conn, planta_id, "evento-confirmado")
+    db.marcar_evento_projetado(conn, planta_id, "evento-projetado")
+
+    with patch("db.conectar", return_value=conn), patch.object(sys, "argv", ["regar.py", "Jiboia"]):
+        runpy.run_module("regar", run_name="__main__")
+
+    saida = capsys.readouterr().out
+    assert "evento-confirmado" in saida
+    assert "evento-projetado" in saida
+    assert "Calendar" in saida
+
+
+def test_cli_avisa_que_evento_do_calendario_precisa_ser_apagado(capsys):
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+    db.atualizar_score(conn, planta_id, 135)
+    db.marcar_evento_calendario(conn, planta_id, "evento-abc")
+
+    with patch("db.conectar", return_value=conn), patch.object(sys, "argv", ["regar.py", "Jiboia"]):
+        runpy.run_module("regar", run_name="__main__")
+
+    saida = capsys.readouterr().out
+    assert "evento-abc" in saida
+    assert "Calendar" in saida
+
+
+def test_regar_enfileira_eventos_removidos_para_limpeza():
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+    db.marcar_evento_calendario(conn, planta_id, "evento-confirmado")
+    db.marcar_evento_projetado(conn, planta_id, "evento-projetado")
+
+    regar.regar(conn, "Jiboia", hoje=datetime.date(2026, 8, 18))
+
+    pendentes = {p["evento_id"] for p in db.listar_eventos_pendentes_limpeza(conn)}
+    assert pendentes == {"evento-confirmado", "evento-projetado"}
+
+
+def test_regar_nao_enfileira_nada_quando_nao_havia_eventos():
+    conn = _conexao_teste()
+    db.inserir_planta(conn, PLANTA_EXEMPLO)
+
+    regar.regar(conn, "Jiboia", hoje=datetime.date(2026, 8, 18))
+
+    assert db.listar_eventos_pendentes_limpeza(conn) == []

@@ -51,6 +51,8 @@ SCORE_PROJETADO_ADIA = 90
 FATOR_ALIVIO_CHUVA_INDOOR = 0.5
 LIMIAR_ALIVIO_CHUVA_INDOOR_MAX = 3.0
 
+FATOR_RETENCAO = {"alta": 0.6, "media": 1.0, "baixa": 1.3}
+
 
 def geocode_cidade(cidade):
     resp = _get_com_retry(
@@ -63,7 +65,7 @@ def geocode_cidade(cidade):
     return resultados[0]["latitude"], resultados[0]["longitude"]
 
 
-def buscar_dados_climaticos(lat, lon, dias_passados=1, dias_futuros=2):
+def buscar_dados_climaticos(lat, lon, dias_passados=1, dias_futuros=3):
     resp = _get_com_retry(
         "https://api.open-meteo.com/v1/forecast",
         params={
@@ -82,21 +84,27 @@ def clima_do_dia(resposta_api, data_iso):
     diario = resposta_api["daily"]
     idx = diario["time"].index(data_iso)
     return {
-        "et0": diario["et0_fao_evapotranspiration"][idx],
+        "et0": diario["et0_fao_evapotranspiration"][idx] or 0.0,
         "precipitacao_mm": diario["precipitation_sum"][idx] or 0.0,
         "probabilidade_chuva_pct": diario["precipitation_probability_max"][idx] or 0,
         "windspeed_10m_max": diario["windspeed_10m_max"][idx] or 0.0,
         "uv_index_max": diario["uv_index_max"][idx] or 0.0,
-        "umidade_relativa_pct": diario["relative_humidity_2m_mean"][idx],
-        "nebulosidade_pct": diario["cloudcover_mean"][idx],
+        "umidade_relativa_pct": diario["relative_humidity_2m_mean"][idx] or 0.0,
+        "nebulosidade_pct": diario["cloudcover_mean"][idx] or 0.0,
     }
 
 
 def calcular_incremento_clima(planta, clima_hoje):
     exposicao_fator = planta["exposicao"] / 10
     fator = regras_score.fator_planta(planta["umidade_ideal_pct"])
+    # .get(..., 1.0) em vez de [] é defesa em profundidade: o valor já é
+    # validado em db.atualizar_retencao_substrato, mas se um valor inválido
+    # chegar até aqui por outro caminho (SQL direto, código futuro), cair
+    # pro fator neutro (media) é bem melhor do que derrubar o ciclo diário
+    # inteiro com KeyError.
+    fator_retencao = FATOR_RETENCAO.get(planta.get("retencao_substrato", "media"), 1.0)
 
-    secagem = clima_hoje["et0"] * fator * exposicao_fator
+    secagem = clima_hoje["et0"] * fator * fator_retencao * exposicao_fator
 
     if exposicao_fator > 0:
         if clima_hoje["windspeed_10m_max"] >= LIMIAR_VENTO_KMH:

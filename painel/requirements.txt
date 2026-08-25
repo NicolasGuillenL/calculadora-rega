@@ -1,0 +1,9 @@
+# Streamlit Community Cloud detecta e instala tanto este arquivo quanto o
+# requirements.txt da raiz do repositório, mas duplicamos aqui as três
+# dependências que db.py/regar.py realmente precisam em runtime — assim o
+# painel funciona mesmo se algum dia o comportamento de merge do Cloud mudar
+# ou um deploy usar só este arquivo.
+requests>=2.32,<3
+libsql-experimental>=0.0.30
+python-dotenv>=1.0,<2
+streamlit>=1.38,<2
