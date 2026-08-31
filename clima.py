@@ -65,7 +65,13 @@ def geocode_cidade(cidade):
     return resultados[0]["latitude"], resultados[0]["longitude"]
 
 
-def buscar_dados_climaticos(lat, lon, dias_passados=1, dias_futuros=3):
+def buscar_dados_climaticos(lat, lon, dias_passados=2, dias_futuros=3):
+    # dias_passados=2 (não 1): o dado do dia corrente que a API devolve
+    # quando o ciclo roda é uma estimativa provisória (o dia ainda não
+    # terminou) — só fica reconciliado com a medição real no dia seguinte.
+    # Pedir 2 dias de passado garante que "ontem" sempre venha com o valor
+    # já reconciliado, e dá margem pra motor.corrigir_historico_retroativo
+    # ainda pegar o dia anterior a esse caso o ciclo tenha pulado um dia.
     resp = _get_com_retry(
         "https://api.open-meteo.com/v1/forecast",
         params={

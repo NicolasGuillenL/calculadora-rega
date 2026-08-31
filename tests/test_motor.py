@@ -214,8 +214,13 @@ def test_rodar_ciclo_segunda_chamada_no_mesmo_dia_nao_altera_score(mock_clima_di
 
     assert db.obter_planta(conn, "Jiboia")["score"] == score_apos_primeira
     assert resumo_segunda["atualizadas"] == []
-    # a segunda chamada não deveria nem bater na API de clima de novo.
-    assert mock_busca.call_count == 1
+    # a segunda chamada ainda bate na API de clima (agora isso é
+    # necessário: corrigir_historico_retroativo precisa do clima mais
+    # recente pra checar dias passados toda vez que o ciclo roda), mas a
+    # correção é idempotente — sem dado novo revisado, não há nada pra
+    # corrigir e o score não muda.
+    assert mock_busca.call_count == 2
+    assert resumo_segunda["correcoes_retroativas"] == []
 
 
 @patch("motor.config.resolver_coordenadas", return_value=(-23.5, -46.6))
@@ -546,3 +551,126 @@ def test_rodar_ciclo_planta_atrasada_que_cai_abaixo_de_100_nao_gera_projecao(
     assert planta["score"] == 85
     assert planta["evento_calendario_id"] == "evento-existente"
     assert resumo["projecoes"] == []
+
+
+RESPOSTA_CHUVA_DE_ONTEM_REVISADA_PRA_CIMA = {
+    "daily": {
+        "time": ["2026-08-17", "2026-08-18"],
+        "et0_fao_evapotranspiration": [3.0, 2.0],
+        # 2026-08-17 foi processado com uma estimativa provisória de pouca
+        # chuva; essa resposta representa o dado já reconciliado, mostrando
+        # que na verdade choveu bastante.
+        "precipitation_sum": [40.0, 0.0],
+        "precipitation_probability_max": [10, 10],
+        "windspeed_10m_max": [5.0, 5.0],
+        "uv_index_max": [3.0, 3.0],
+        "relative_humidity_2m_mean": [55.0, 55.0],
+        "cloudcover_mean": [20.0, 20.0],
+    }
+}
+
+
+def test_corrigir_historico_retroativo_atualiza_historico_e_retorna_delta():
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, PLANTA_EXEMPLO)
+    planta = db.obter_planta(conn, "Jiboia")
+    db.registrar_historico_score(
+        conn, planta_id, "2026-08-17",
+        incremento_base=10.0, incremento_clima=0.0, score_final=50.0,
+        et0=3.0, precipitacao_mm=0.5,
+    )
+
+    delta, correcoes = motor.corrigir_historico_retroativo(
+        conn, planta, RESPOSTA_CHUVA_DE_ONTEM_REVISADA_PRA_CIMA, "2026-08-18"
+    )
+
+    # mais chuva medida reduz o incremento de clima (efeito_chuva sobe)
+    assert delta < 0
+    assert len(correcoes) == 1
+    assert correcoes[0]["data"] == "2026-08-17"
+    assert correcoes[0]["precipitacao_mm_antiga"] == 0.5
+    assert correcoes[0]["precipitacao_mm_nova"] == 40.0
+
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT score_final, precipitacao_mm FROM historico_scores WHERE planta_id = ? AND data = ?",
+        (planta_id, "2026-08-17"),
+    )
+    score_final_corrigido, precip_corrigida = cur.fetchall()[0]
+    assert precip_corrigida == 40.0
+    assert score_final_corrigido == 50.0 + delta
+
+
+def test_corrigir_historico_retroativo_ignora_dia_sem_historico():
+    conn = _conexao_teste()
+    db.inserir_planta(conn, PLANTA_EXEMPLO)
+    planta = db.obter_planta(conn, "Jiboia")
+    # nenhum historico_scores gravado pra 2026-08-17: nada a corrigir.
+
+    delta, correcoes = motor.corrigir_historico_retroativo(
+        conn, planta, RESPOSTA_CHUVA_DE_ONTEM_REVISADA_PRA_CIMA, "2026-08-18"
+    )
+
+    assert delta == 0.0
+    assert correcoes == []
+
+
+@patch("motor.config.resolver_coordenadas", return_value=(-23.5, -46.6))
+@patch("motor.clima.buscar_dados_climaticos", return_value=RESPOSTA_CHUVA_DE_ONTEM_REVISADA_PRA_CIMA)
+def test_rodar_ciclo_aplica_correcao_retroativa_ao_score_atual(mock_busca, mock_coords):
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, {**PLANTA_EXEMPLO, "exposicao": 10})
+    db.atualizar_score(conn, planta_id, 50)
+    db.registrar_historico_score(
+        conn, planta_id, "2026-08-17",
+        incremento_base=10.0, incremento_clima=0.0, score_final=50.0,
+        et0=3.0, precipitacao_mm=0.0,
+    )
+
+    resumo = motor.rodar_ciclo(conn, hoje=datetime.date(2026, 8, 18))
+
+    assert len(resumo["correcoes_retroativas"]) == 1
+    correcao = resumo["correcoes_retroativas"][0]
+    assert correcao["nome"] == "Jiboia"
+    assert correcao["score_antes"] == 50.0
+    # 50 + delta(-197, chuva forte revisada) tem piso em 0
+    assert correcao["score_depois"] == 0.0
+
+    # o ciclo de hoje ainda roda por cima do score já corrigido: score
+    # corrigido (0) + incremento_base(10) + incremento_clima de hoje
+    # (et0=2.0, sem chuva) = 12.
+    planta = db.obter_planta(conn, "Jiboia")
+    assert planta["score"] == 12.0
+    assert resumo["atualizadas"][0]["score"] == 12.0
+
+
+@patch("motor.config.resolver_coordenadas", return_value=(-23.5, -46.6))
+@patch("motor.clima.buscar_dados_climaticos", return_value=RESPOSTA_CHUVA_DE_ONTEM_REVISADA_PRA_CIMA)
+def test_rodar_ciclo_correcao_cancela_evento_quando_score_cai_abaixo_de_100(mock_busca, mock_coords):
+    conn = _conexao_teste()
+    planta_id = db.inserir_planta(conn, {**PLANTA_EXEMPLO, "exposicao": 10})
+    db.atualizar_score(conn, planta_id, 120)
+    db.marcar_evento_calendario(conn, planta_id, "evento-existente")
+    db.registrar_historico_score(
+        conn, planta_id, "2026-08-17",
+        incremento_base=10.0, incremento_clima=0.0, score_final=120.0,
+        et0=3.0, precipitacao_mm=0.0,
+    )
+
+    resumo = motor.rodar_ciclo(conn, hoje=datetime.date(2026, 8, 18))
+
+    correcao = resumo["correcoes_retroativas"][0]
+    assert correcao["score_depois"] < 100
+    assert correcao["evento_calendario_id_a_cancelar"] == "evento-existente"
+
+    # não pode reaparecer como "ainda atrasada" com o mesmo evento que a
+    # correção já reportou pra cancelar — senão o agente cancelaria E
+    # reafirmaria o mesmo lembrete no mesmo resumo.
+    assert resumo["ainda_atrasadas"] == []
+
+    # a referência ao evento no banco só é limpa depois, quando o agente
+    # chamar db.limpar_evento_calendario após cancelar no Calendar de
+    # verdade — até lá ela continua ali, é só ignorada pelo resto DESTE
+    # ciclo (por isso não aparece em ainda_atrasadas acima).
+    planta = db.obter_planta(conn, "Jiboia")
+    assert planta["evento_calendario_id"] == "evento-existente"
